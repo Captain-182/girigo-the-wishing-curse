@@ -460,11 +460,22 @@ function Granted({ onContinue }: { onContinue: () => void }) {
 }
 
 /* ---------------- CURSE COUNTDOWN ---------------- */
-function Curse({ onReset }: { onReset: () => void }) {
+type CursePhase = "countdown" | "passing" | "transferred";
+
+function Curse({ name, onReset }: { name: string; onReset: () => void }) {
   const [remaining, setRemaining] = useState(() => {
     const end = Number(localStorage.getItem(CURSE_KEY));
     return Math.max(0, end - Date.now());
   });
+  const [phase, setPhase] = useState<CursePhase>("countdown");
+  const [copied, setCopied] = useState(false);
+
+  const shareUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}${window.location.pathname}?passedFrom=${encodeURIComponent(
+          name || "anonymous",
+        )}`
+      : "";
 
   useEffect(() => {
     let raf: number;
@@ -477,8 +488,9 @@ function Curse({ onReset }: { onReset: () => void }) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // Ominous heartbeat via Web Audio API
+  // Ominous heartbeat — speeds up while passing
   useEffect(() => {
+    if (phase === "transferred") return;
     const AC =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext: typeof AudioContext })
@@ -488,7 +500,7 @@ function Curse({ onReset }: { onReset: () => void }) {
     ctx.resume().catch(() => {});
 
     const master = ctx.createGain();
-    master.gain.value = 0.35;
+    master.gain.value = phase === "passing" ? 0.5 : 0.35;
     const filter = ctx.createBiquadFilter();
     filter.type = "lowpass";
     filter.frequency.value = 220;
@@ -508,13 +520,14 @@ function Curse({ onReset }: { onReset: () => void }) {
     };
 
     let stopped = false;
+    const interval = phase === "passing" ? 460 : 1100;
+    const gap = phase === "passing" ? 0.12 : 0.22;
     const schedule = () => {
       if (stopped) return;
       const t = ctx.currentTime;
-      // lub-dub heartbeat
       thump(t, 55, 0.18, 0.9);
-      thump(t + 0.22, 48, 0.22, 0.7);
-      setTimeout(schedule, 1100);
+      thump(t + gap, 48, 0.22, 0.7);
+      setTimeout(schedule, interval);
     };
     schedule();
 
@@ -522,14 +535,55 @@ function Curse({ onReset }: { onReset: () => void }) {
       stopped = true;
       ctx.close().catch(() => {});
     };
-  }, []);
+  }, [phase]);
 
+  const playStatic = () => {
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const dur = 1.2;
+    const buffer = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const decay = 1 - i / data.length;
+      data[i] = (Math.random() * 2 - 1) * decay;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const g = ctx.createGain();
+    g.gain.value = 0.4;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 800;
+    src.connect(hp).connect(g).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  };
+
+  const openPassing = async () => {
+    setPhase("passing");
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  const completeTransfer = () => {
+    playStatic();
+    setPhase("transferred");
+    localStorage.removeItem(CURSE_KEY);
+    setTimeout(() => onReset(), 3200);
+  };
 
   const hh = Math.floor(remaining / 3600000);
   const mm = Math.floor((remaining % 3600000) / 60000);
   const ss = Math.floor((remaining % 60000) / 1000);
   const ms = Math.floor((remaining % 1000) / 10);
-
   const expired = remaining <= 0;
 
   return (
@@ -544,7 +598,13 @@ function Curse({ onReset }: { onReset: () => void }) {
       </div>
 
       <div className="relative w-full max-w-2xl">
-        <div className="absolute inset-0 -z-10 blur-3xl" style={{ background: "radial-gradient(circle, oklch(0.55 0.25 27 / 0.35), transparent 70%)" }} />
+        <div
+          className="absolute inset-0 -z-10 blur-3xl"
+          style={{
+            background:
+              "radial-gradient(circle, oklch(0.55 0.25 27 / 0.35), transparent 70%)",
+          }}
+        />
         <div className="flex items-baseline justify-center gap-1 font-mono font-bold tabular-nums text-glow-blood">
           <TimeBlock v={hh} />
           <Colon />
@@ -574,15 +634,145 @@ function Curse({ onReset }: { onReset: () => void }) {
           TO RECORD THEIR DESIRES.
         </p>
         <button
-          onClick={onReset}
+          onClick={openPassing}
           className="btn-ominous mt-6 px-8 py-3 font-display text-[10px] tracking-[0.5em]"
         >
           PASS THE RITUAL
         </button>
       </div>
+
+      {phase === "passing" && (
+        <PassingModal
+          url={shareUrl}
+          copied={copied}
+          onCopy={async () => {
+            try {
+              await navigator.clipboard.writeText(shareUrl);
+              setCopied(true);
+            } catch {
+              setCopied(false);
+            }
+          }}
+          onClose={() => setPhase("countdown")}
+          onSimulate={completeTransfer}
+        />
+      )}
+
+      {phase === "transferred" && <TransferFlash />}
     </section>
   );
 }
+
+function PassingModal({
+  url,
+  copied,
+  onCopy,
+  onClose,
+  onSimulate,
+}: {
+  url: string;
+  copied: boolean;
+  onCopy: () => void;
+  onClose: () => void;
+  onSimulate: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/80 backdrop-blur-sm sm:items-center">
+      <div className="scanlines relative w-full max-w-md animate-fade-up border border-primary/40 bg-[oklch(0.06_0_0)] p-6 shadow-[0_0_60px_oklch(0.55_0.25_27/0.4)]">
+        <button
+          onClick={onClose}
+          className="absolute right-3 top-3 font-mono text-[10px] tracking-widest text-muted-foreground hover:text-primary"
+          aria-label="Close"
+        >
+          [ X ]
+        </button>
+
+        <div className="text-[10px] tracking-[0.5em] text-primary/80 animate-flicker">
+          ◉ SIGNAL LOCK ACQUIRED
+        </div>
+        <h3 className="mt-3 font-display text-base leading-relaxed tracking-[0.25em] text-glow-ghost">
+          THE LINK HAS BEEN
+          <br />
+          GEOLOCATED.
+        </h3>
+        <p className="mt-3 text-[11px] leading-relaxed tracking-[0.2em] text-muted-foreground">
+          COPY AND TRANSMIT TO AN UNWITTING SOUL.
+        </p>
+
+        <div className="mt-5 flex items-center gap-2 border border-border bg-black/60 p-2">
+          <span className="truncate font-mono text-[10px] text-primary/80">
+            {url}
+          </span>
+          <button
+            onClick={onCopy}
+            className="ml-auto shrink-0 border border-primary/60 px-3 py-1 font-mono text-[9px] tracking-widest text-primary hover:bg-primary/10"
+          >
+            {copied ? "COPIED" : "COPY"}
+          </button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <ShareBtn
+            label="WHATSAPP"
+            onClick={() =>
+              window.open(
+                `https://wa.me/?text=${encodeURIComponent(url)}`,
+                "_blank",
+              )
+            }
+          />
+          <ShareBtn
+            label="DISCORD"
+            onClick={() => {
+              navigator.clipboard.writeText(url).catch(() => {});
+              window.open("https://discord.com/channels/@me", "_blank");
+            }}
+          />
+        </div>
+
+        <div className="mt-6 border-t border-border pt-4 text-center">
+          <button
+            onClick={onSimulate}
+            className="font-mono text-[9px] tracking-[0.35em] text-muted-foreground/40 underline-offset-4 hover:text-primary/70 hover:underline"
+          >
+            simulate friend accepting curse
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShareBtn({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="border border-border bg-black/40 py-3 font-display text-[10px] tracking-[0.35em] text-muted-foreground hover:border-primary/60 hover:text-primary"
+    >
+      {label}
+    </button>
+  );
+}
+
+function TransferFlash() {
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black">
+      <div
+        className="absolute inset-0 animate-flash-red"
+        style={{ background: "oklch(0.55 0.25 27)" }}
+      />
+      <div className="relative z-10 text-center">
+        <div className="font-display text-3xl tracking-[0.4em] text-glow-blood animate-glitch">
+          REPRIEVE GRANTED.
+        </div>
+        <div className="mt-6 max-w-xs font-mono text-[11px] leading-relaxed tracking-[0.3em] text-muted-foreground">
+          THE BURDEN BELONGS TO ANOTHER NOW.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function TimeBlock({ v, small }: { v: number; small?: boolean }) {
   const str = v.toString().padStart(2, "0");
