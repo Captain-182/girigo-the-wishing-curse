@@ -124,7 +124,9 @@ function Landing({
           onChange={setBirth}
           placeholder="YYYY-MM-DD"
           mono
+          type="date"
         />
+
         <button
           type="submit"
           disabled={!valid}
