@@ -573,7 +573,7 @@ function Curse({ onReset }: { onReset: () => void }) {
           TO RECORD THEIR DESIRES.
         </p>
         <button
-          onClick={() => navigator.share?.({ title: "Girigo", text: "Inscribe the ritual.", url: window.location.href }).catch(() => {})}
+          onClick={onReset}
           className="btn-ominous mt-6 px-8 py-3 font-display text-[10px] tracking-[0.5em]"
         >
           PASS THE RITUAL
