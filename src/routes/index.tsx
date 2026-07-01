@@ -149,12 +149,14 @@ function Field({
   onChange,
   placeholder,
   mono,
+  type = "text",
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   mono?: boolean;
+  type?: string;
 }) {
   return (
     <label className="block">
@@ -162,6 +164,7 @@ function Field({
         {label}
       </span>
       <input
+        type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -173,6 +176,7 @@ function Field({
     </label>
   );
 }
+
 
 function PrayingHands() {
   // Pixel-art praying hands rendered from a bitmap grid
