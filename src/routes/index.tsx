@@ -60,6 +60,7 @@ function Girigo() {
       )}
       {stage === "curse" && (
         <Curse
+          name={name}
           onReset={() => {
             localStorage.removeItem(CURSE_KEY);
             setName("");
