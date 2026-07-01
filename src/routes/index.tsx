@@ -1,24 +1,542 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 
-// No head() here: the home route inherits title/description/og/twitter from
-// __root.tsx, and ships no og:image so serve-time hosting can inject the
-// project's social preview (explicit og:image or latest screenshot).
 export const Route = createFileRoute("/")({
-  component: Index,
+  component: Girigo,
 });
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
-function Index() {
+type Stage = "landing" | "ritual" | "transmitting" | "granted" | "curse";
+const CURSE_KEY = "girigo:curse_end";
+const CURSE_MS = 24 * 60 * 60 * 1000;
+
+function Girigo() {
+  const [stage, setStage] = useState<Stage>("landing");
+  const [name, setName] = useState("");
+  const [birth, setBirth] = useState("");
+
+  // If a curse is already active, jump straight there
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const end = Number(localStorage.getItem(CURSE_KEY));
+    if (end && end > Date.now()) setStage("curse");
+  }, []);
+
+  return (
+    <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
+      {/* atmospheric layers */}
+      <div className="pointer-events-none absolute inset-0 noise opacity-40" />
+      <div className="pointer-events-none absolute inset-0 scanlines opacity-30" />
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(ellipse at 50% 0%, oklch(0.55 0.25 27 / 0.12), transparent 60%), radial-gradient(ellipse at 50% 100%, oklch(0.55 0.25 27 / 0.08), transparent 60%)",
+        }}
+      />
+      <BrandMark />
+
+      {stage === "landing" && (
+        <Landing
+          name={name}
+          birth={birth}
+          setName={setName}
+          setBirth={setBirth}
+          onSubmit={() => setStage("ritual")}
+        />
+      )}
+      {stage === "ritual" && (
+        <Ritual onRecorded={() => setStage("transmitting")} />
+      )}
+      {stage === "transmitting" && (
+        <Transmitting onDone={() => setStage("granted")} />
+      )}
+      {stage === "granted" && (
+        <Granted
+          onContinue={() => {
+            localStorage.setItem(CURSE_KEY, String(Date.now() + CURSE_MS));
+            setStage("curse");
+          }}
+        />
+      )}
+      {stage === "curse" && <Curse />}
+    </main>
+  );
+}
+
+function BrandMark() {
+  return (
+    <div className="pointer-events-none absolute left-1/2 top-6 z-20 -translate-x-1/2 select-none text-center">
+      <div className="font-display text-xs tracking-[0.6em] text-muted-foreground animate-flicker">
+        GIRIGO
+      </div>
+      <div className="mt-1 font-display text-[10px] tracking-[0.4em] text-primary/70">
+        기리고
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- LANDING ---------------- */
+function Landing({
+  name,
+  birth,
+  setName,
+  setBirth,
+  onSubmit,
+}: {
+  name: string;
+  birth: string;
+  setName: (v: string) => void;
+  setBirth: (v: string) => void;
+  onSubmit: () => void;
+}) {
+  const valid = name.trim().length > 1 && /^\d{4}-\d{2}-\d{2}$/.test(birth);
+  return (
+    <section className="relative z-10 mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center px-6 py-20 animate-fade-up">
+      <PrayingHands />
+      <h1 className="mt-8 text-center font-display text-2xl font-semibold tracking-[0.35em] text-glow-ghost">
+        IF WISHES
+        <br />
+        COULD KILL
+      </h1>
+      <p className="mt-4 max-w-xs text-center text-xs leading-relaxed tracking-widest text-muted-foreground">
+        Speak your name into the void.
+        <br />
+        The ritual requires an offering.
+      </p>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid) onSubmit();
+        }}
+        className="mt-10 w-full space-y-4"
+      >
+        <Field
+          label="FULL NAME"
+          value={name}
+          onChange={setName}
+          placeholder="Your true name"
+        />
+        <Field
+          label="BIRTHDATE"
+          value={birth}
+          onChange={setBirth}
+          placeholder="YYYY-MM-DD"
+          mono
+        />
+        <button
+          type="submit"
+          disabled={!valid}
+          className="btn-ominous mt-8 w-full py-4 font-display text-xs tracking-[0.5em] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          INSCRIBE RITUAL
+        </button>
+      </form>
+
+      <p className="mt-10 max-w-xs text-center text-[10px] tracking-[0.3em] text-muted-foreground/60">
+        BY PROCEEDING, YOU CONSENT TO BE BOUND.
+      </p>
+    </section>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  mono,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  mono?: boolean;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-[10px] tracking-[0.4em] text-muted-foreground">
+        {label}
+      </span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={
+          "w-full border-b border-border bg-transparent py-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary " +
+          (mono ? "font-mono tracking-widest" : "tracking-wider")
+        }
+      />
+    </label>
+  );
+}
+
+function PrayingHands() {
+  // Pixel-art praying hands rendered from a bitmap grid
+  const grid = [
+    "..........XX..XX..........",
+    ".........XWWXXWWX.........",
+    "........XWWWXXWWWX........",
+    "........XWWWXXWWWX........",
+    "........XWWWXXWWWX........",
+    ".......XWWWWXXWWWWX.......",
+    ".......XWWWWXXWWWWX.......",
+    "......XWWWWWXXWWWWWX......",
+    "......XWWWWWXXWWWWWX......",
+    ".....XWWWWWWXXWWWWWWX.....",
+    ".....XWWWWWWXXWWWWWWX.....",
+    "....XWWWWWWWXXWWWWWWWX....",
+    "....XWWWWWWWXXWWWWWWWX....",
+    "...XWWWWWWWWXXWWWWWWWWX...",
+    "...XWWWWWWWWXXWWWWWWWWX...",
+    "..XWWWWWWWWWXXWWWWWWWWWX..",
+    "..XWWWWWWWWWXXWWWWWWWWWX..",
+    "..XWWWWWWWWWXXWWWWWWWWWX..",
+    "..XRWWWWWWWWXXWWWWWWWWRX..",
+    "...XRWWWWWWWXXWWWWWWWRX...",
+    "....XRRWWWWWXXWWWWWRRX....",
+    ".....XRRRWWWWWWWWRRRX.....",
+    "......XRRRRRRRRRRRRX......",
+    ".......XXXXXXXXXXXX.......",
+  ];
+  const size = 6;
+  return (
+    <div className="animate-hand-pulse">
+      <svg
+        width={grid[0].length * size}
+        height={grid.length * size}
+        viewBox={`0 0 ${grid[0].length * size} ${grid.length * size}`}
+        style={{ imageRendering: "pixelated" }}
+      >
+        {grid.map((row, y) =>
+          row.split("").map((c, x) => {
+            if (c === ".") return null;
+            const fill =
+              c === "W"
+                ? "oklch(0.98 0 0)"
+                : c === "R"
+                  ? "oklch(0.55 0.25 27)"
+                  : "oklch(0.15 0 0)";
+            return (
+              <rect
+                key={`${x}-${y}`}
+                x={x * size}
+                y={y * size}
+                width={size}
+                height={size}
+                fill={fill}
+              />
+            );
+          }),
+        )}
+      </svg>
+    </div>
+  );
+}
+
+/* ---------------- RITUAL ---------------- */
+function Ritual({ onRecorded }: { onRecorded: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [hasCam, setHasCam] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const RECORD_MS = 5000;
+
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          setHasCam(true);
+        }
+      } catch {
+        setHasCam(false);
+      }
+    })();
+    return () => {
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!recording) return;
+    const start = Date.now();
+    const id = setInterval(() => {
+      const p = Math.min(1, (Date.now() - start) / RECORD_MS);
+      setProgress(p);
+      if (p >= 1) {
+        clearInterval(id);
+        setRecording(false);
+        onRecorded();
+      }
+    }, 33);
+    return () => clearInterval(id);
+  }, [recording, onRecorded]);
+
+  return (
+    <section className="relative z-10 mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center px-6 py-20 animate-fade-up">
+      <div className="mb-6 text-center">
+        <div className="text-[10px] tracking-[0.5em] text-primary/80">
+          STEP 02
+        </div>
+        <h2 className="mt-2 font-display text-lg tracking-[0.35em] text-glow-ghost">
+          RECORD YOUR WISH
+        </h2>
+      </div>
+
+      <div className="relative aspect-[3/4] w-full overflow-hidden border border-border bg-black">
+        {hasCam ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="h-full w-full object-cover"
+            style={{ transform: "scaleX(-1)" }}
+          />
+        ) : (
+          <FeedPlaceholder />
+        )}
+
+        {/* viewfinder overlay */}
+        <div className="pointer-events-none absolute inset-0">
+          <Corner className="left-3 top-3" />
+          <Corner className="right-3 top-3 rotate-90" />
+          <Corner className="right-3 bottom-3 rotate-180" />
+          <Corner className="left-3 bottom-3 -rotate-90" />
+
+          <div className="absolute inset-x-0 top-3 flex items-center justify-between px-4 font-mono text-[10px] tracking-widest text-primary/80">
+            <span className="flex items-center gap-1.5">
+              <span
+                className={
+                  "inline-block h-1.5 w-1.5 rounded-full " +
+                  (recording ? "bg-primary animate-pulse-blood" : "bg-primary/60")
+                }
+              />
+              {recording ? "REC" : "LIVE"}
+            </span>
+            <span>GIRIGO-CH01</span>
+          </div>
+
+          <div className="absolute inset-0 scanlines opacity-40" />
+          <div
+            className="absolute inset-x-0 h-16 animate-scan"
+            style={{
+              background:
+                "linear-gradient(180deg, transparent, oklch(0.98 0 0 / 0.08), transparent)",
+            }}
+          />
+
+          <div className="absolute inset-x-0 bottom-3 px-4 font-mono text-[10px] tracking-widest text-primary/70">
+            <div className="flex justify-between">
+              <span>◉ 0{Math.floor(progress * 5)}:0{Math.floor((progress * 30) % 60).toString().padStart(2, "0")}</span>
+              <span>{hasCam ? "SIGNAL LOCKED" : "SIM MODE"}</span>
+            </div>
+            <div className="mt-2 h-[2px] w-full bg-border">
+              <div
+                className="h-full bg-primary transition-[width] duration-75"
+                style={{ width: `${progress * 100}%` }}
+              />
+            </div>
+          </div>
+
+          {/* crosshair */}
+          <div className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 border border-primary/40">
+            <div className="absolute left-1/2 top-1/2 h-1 w-1 -translate-x-1/2 -translate-y-1/2 bg-primary" />
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={() => !recording && setRecording(true)}
+        disabled={recording}
+        className="btn-ominous mt-8 w-full py-4 font-display text-xs tracking-[0.5em]"
+      >
+        {recording ? "TRANSMITTING…" : "RECORD 5-SECOND WISH"}
+      </button>
+      <p className="mt-4 text-center text-[10px] tracking-[0.3em] text-muted-foreground/60">
+        SPEAK CLEARLY. IT IS LISTENING.
+      </p>
+    </section>
+  );
+}
+
+function Corner({ className = "" }: { className?: string }) {
   return (
     <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
+      className={"absolute h-5 w-5 " + className}
+      style={{
+        borderTop: "1px solid oklch(0.55 0.25 27 / 0.8)",
+        borderLeft: "1px solid oklch(0.55 0.25 27 / 0.8)",
+      }}
+    />
+  );
+}
+
+function FeedPlaceholder() {
+  return (
+    <div className="relative flex h-full w-full items-center justify-center bg-gradient-to-b from-[oklch(0.08_0_0)] to-black">
+      <div className="text-center">
+        <div className="mx-auto h-16 w-16 rounded-full border border-primary/40 animate-pulse-blood" />
+        <div className="mt-4 font-mono text-[10px] tracking-[0.4em] text-muted-foreground">
+          CAMERA LIVE FEED
+        </div>
+        <div className="mt-1 font-mono text-[10px] tracking-[0.3em] text-primary/60 animate-flicker">
+          NO SIGNAL — SIMULATING
+        </div>
+      </div>
     </div>
+  );
+}
+
+/* ---------------- TRANSMITTING ---------------- */
+function Transmitting({ onDone }: { onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 3200);
+    return () => clearTimeout(t);
+  }, [onDone]);
+  return (
+    <section className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6">
+      <div className="relative flex h-64 w-64 items-center justify-center">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="absolute h-full w-full rounded-full border border-primary"
+            style={{
+              animation: `ring-expand 2.4s ease-out ${i * 0.8}s infinite`,
+            }}
+          />
+        ))}
+        <span className="absolute h-6 w-6 rounded-full bg-primary animate-pulse-blood" />
+      </div>
+      <div className="mt-16 font-display text-sm tracking-[0.6em] text-glow-ghost animate-flicker">
+        TRANSMITTING
+      </div>
+      <div className="mt-2 font-mono text-[10px] tracking-[0.4em] text-muted-foreground">
+        BINDING SIGNAL TO SOUL
+      </div>
+    </section>
+  );
+}
+
+/* ---------------- GRANTED ---------------- */
+function Granted({ onContinue }: { onContinue: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onContinue, 2200);
+    return () => clearTimeout(t);
+  }, [onContinue]);
+  return (
+    <section className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 animate-fade-up">
+      <div className="font-display text-4xl tracking-[0.35em] text-glow-blood animate-glitch">
+        WISH GRANTED.
+      </div>
+      <div className="mt-6 font-mono text-[10px] tracking-[0.4em] text-muted-foreground">
+        THE DEBT HAS BEEN RECORDED
+      </div>
+    </section>
+  );
+}
+
+/* ---------------- CURSE COUNTDOWN ---------------- */
+function Curse() {
+  const [remaining, setRemaining] = useState(() => {
+    const end = Number(localStorage.getItem(CURSE_KEY));
+    return Math.max(0, end - Date.now());
+  });
+
+  useEffect(() => {
+    let raf: number;
+    const tick = () => {
+      const end = Number(localStorage.getItem(CURSE_KEY));
+      setRemaining(Math.max(0, end - Date.now()));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const hh = Math.floor(remaining / 3600000);
+  const mm = Math.floor((remaining % 3600000) / 60000);
+  const ss = Math.floor((remaining % 60000) / 1000);
+  const ms = Math.floor((remaining % 1000) / 10);
+
+  const expired = remaining <= 0;
+
+  return (
+    <section className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 animate-fade-up">
+      <div className="mb-8 text-center">
+        <div className="text-[10px] tracking-[0.6em] text-primary/80 animate-flicker">
+          THE CURSE IS BOUND
+        </div>
+        <div className="mt-3 font-display text-sm tracking-[0.4em] text-muted-foreground">
+          TIME UNTIL DESCENT
+        </div>
+      </div>
+
+      <div className="relative w-full max-w-2xl">
+        <div className="absolute inset-0 -z-10 blur-3xl" style={{ background: "radial-gradient(circle, oklch(0.55 0.25 27 / 0.35), transparent 70%)" }} />
+        <div className="flex items-baseline justify-center gap-1 font-mono font-bold tabular-nums text-glow-blood">
+          <TimeBlock v={hh} />
+          <Colon />
+          <TimeBlock v={mm} />
+          <Colon />
+          <TimeBlock v={ss} />
+          <Colon small />
+          <TimeBlock v={ms} small />
+        </div>
+        <div className="mt-3 flex justify-center gap-8 font-mono text-[10px] tracking-[0.4em] text-muted-foreground">
+          <span>HH</span><span>MM</span><span>SS</span><span>MS</span>
+        </div>
+      </div>
+
+      {expired && (
+        <div className="mt-10 font-display text-xl tracking-[0.5em] text-primary text-glow-blood animate-glitch">
+          THE DESCENT HAS BEGUN.
+        </div>
+      )}
+
+      <div className="mt-16 max-w-md border-t border-border pt-6 text-center">
+        <p className="text-[11px] leading-relaxed tracking-[0.25em] text-muted-foreground">
+          TO HALT THE DESCENT, THE RITUAL
+          <br />
+          MUST BE PASSED. CONVINCE ANOTHER
+          <br />
+          TO RECORD THEIR DESIRES.
+        </p>
+        <button
+          onClick={() => navigator.share?.({ title: "Girigo", text: "Inscribe the ritual.", url: window.location.href }).catch(() => {})}
+          className="btn-ominous mt-6 px-8 py-3 font-display text-[10px] tracking-[0.5em]"
+        >
+          PASS THE RITUAL
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function TimeBlock({ v, small }: { v: number; small?: boolean }) {
+  const str = v.toString().padStart(2, "0");
+  return (
+    <span className={small ? "text-4xl md:text-5xl text-primary/80" : "text-6xl md:text-8xl"}>
+      {str}
+    </span>
+  );
+}
+function Colon({ small }: { small?: boolean }) {
+  return (
+    <span
+      className={
+        "animate-flicker text-primary " +
+        (small ? "text-3xl md:text-4xl" : "text-5xl md:text-7xl")
+      }
+    >
+      :
+    </span>
   );
 }
