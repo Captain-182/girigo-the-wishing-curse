@@ -10,15 +10,22 @@ const CURSE_KEY = "girigo:curse_end";
 const CURSE_MS = 24 * 60 * 60 * 1000;
 
 function Girigo() {
-  const [stage, setStage] = useState<Stage>("landing");
+  const [stage, setStage] = useState<Stage>(() => {
+    if (typeof window === "undefined") return "landing";
+    const end = Number(window.localStorage.getItem(CURSE_KEY));
+    return end && end > Date.now() ? "curse" : "landing";
+  });
   const [name, setName] = useState("");
   const [birth, setBirth] = useState("");
 
-  // If a curse is already active, jump straight there
+  // Safety net after hydration: honor active curse, clean up expired entry
   useEffect(() => {
-    if (typeof window === "undefined") return;
     const end = Number(localStorage.getItem(CURSE_KEY));
-    if (end && end > Date.now()) setStage("curse");
+    if (end && end > Date.now()) {
+      setStage((s) => (s === "curse" ? s : "curse"));
+    } else if (end) {
+      localStorage.removeItem(CURSE_KEY);
+    }
   }, []);
 
   return (
