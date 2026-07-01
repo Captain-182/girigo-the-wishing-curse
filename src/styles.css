@@ -149,3 +149,13 @@
 .animate-hand-pulse { animation: hand-pulse 3s ease-in-out infinite; }
 .animate-scan { animation: scan 3s linear infinite; }
 .animate-glitch { animation: glitch 0.4s infinite; }
+
+@keyframes flash-red {
+  0% { opacity: 0.9; }
+  15% { opacity: 0.2; }
+  30% { opacity: 0.8; }
+  50% { opacity: 0.1; }
+  100% { opacity: 0.25; }
+}
+.animate-flash-red { animation: flash-red 3.2s ease-out forwards; mix-blend-mode: screen; }
+
