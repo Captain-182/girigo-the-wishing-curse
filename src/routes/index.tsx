@@ -58,7 +58,16 @@ function Girigo() {
           }}
         />
       )}
-      {stage === "curse" && <Curse />}
+      {stage === "curse" && (
+        <Curse
+          onReset={() => {
+            localStorage.removeItem(CURSE_KEY);
+            setName("");
+            setBirth("");
+            setStage("landing");
+          }}
+        />
+      )}
     </main>
   );
 }
