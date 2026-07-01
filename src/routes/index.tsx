@@ -58,7 +58,16 @@ function Girigo() {
           }}
         />
       )}
-      {stage === "curse" && <Curse />}
+      {stage === "curse" && (
+        <Curse
+          onReset={() => {
+            localStorage.removeItem(CURSE_KEY);
+            setName("");
+            setBirth("");
+            setStage("landing");
+          }}
+        />
+      )}
     </main>
   );
 }
@@ -450,7 +459,7 @@ function Granted({ onContinue }: { onContinue: () => void }) {
 }
 
 /* ---------------- CURSE COUNTDOWN ---------------- */
-function Curse() {
+function Curse({ onReset }: { onReset: () => void }) {
   const [remaining, setRemaining] = useState(() => {
     const end = Number(localStorage.getItem(CURSE_KEY));
     return Math.max(0, end - Date.now());
@@ -466,6 +475,54 @@ function Curse() {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, []);
+
+  // Ominous heartbeat via Web Audio API
+  useEffect(() => {
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    ctx.resume().catch(() => {});
+
+    const master = ctx.createGain();
+    master.gain.value = 0.35;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 220;
+    master.connect(filter).connect(ctx.destination);
+
+    const thump = (when: number, freq: number, dur: number, vol: number) => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.frequency.setValueAtTime(freq * 2, when);
+      osc.frequency.exponentialRampToValueAtTime(freq, when + 0.05);
+      g.gain.setValueAtTime(0.0001, when);
+      g.gain.exponentialRampToValueAtTime(vol, when + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+      osc.connect(g).connect(master);
+      osc.start(when);
+      osc.stop(when + dur + 0.05);
+    };
+
+    let stopped = false;
+    const schedule = () => {
+      if (stopped) return;
+      const t = ctx.currentTime;
+      // lub-dub heartbeat
+      thump(t, 55, 0.18, 0.9);
+      thump(t + 0.22, 48, 0.22, 0.7);
+      setTimeout(schedule, 1100);
+    };
+    schedule();
+
+    return () => {
+      stopped = true;
+      ctx.close().catch(() => {});
+    };
+  }, []);
+
 
   const hh = Math.floor(remaining / 3600000);
   const mm = Math.floor((remaining % 3600000) / 60000);
@@ -516,7 +573,7 @@ function Curse() {
           TO RECORD THEIR DESIRES.
         </p>
         <button
-          onClick={() => navigator.share?.({ title: "Girigo", text: "Inscribe the ritual.", url: window.location.href }).catch(() => {})}
+          onClick={onReset}
           className="btn-ominous mt-6 px-8 py-3 font-display text-[10px] tracking-[0.5em]"
         >
           PASS THE RITUAL
