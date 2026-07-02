@@ -85,6 +85,18 @@ function Girigo() {
       {stage === "granted" && (
         <Granted
           onContinue={() => {
+            const from = getPassedFrom();
+            if (from) {
+              broadcastReprieve(from);
+              // clean the URL so a refresh doesn't re-fire the reprieve
+              try {
+                const u = new URL(window.location.href);
+                u.searchParams.delete("passedFrom");
+                window.history.replaceState({}, "", u.toString());
+              } catch {
+                /* noop */
+              }
+            }
             localStorage.setItem(CURSE_KEY, String(Date.now() + CURSE_MS));
             setStage("curse");
           }}
