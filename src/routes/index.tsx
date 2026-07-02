@@ -7,7 +7,32 @@ export const Route = createFileRoute("/")({
 
 type Stage = "landing" | "ritual" | "transmitting" | "granted" | "curse";
 const CURSE_KEY = "girigo:curse_end";
+const REPRIEVE_KEY = "girigo:reprieve";
+const CHANNEL_NAME = "girigo:sync";
 const CURSE_MS = 24 * 60 * 60 * 1000;
+
+function getPassedFrom(): string | null {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search);
+  const v = p.get("passedFrom");
+  return v ? v.trim() : null;
+}
+
+function broadcastReprieve(target: string) {
+  const payload = { target, at: Date.now() };
+  try {
+    localStorage.setItem(REPRIEVE_KEY, JSON.stringify(payload));
+  } catch {
+    /* noop */
+  }
+  try {
+    const bc = new BroadcastChannel(CHANNEL_NAME);
+    bc.postMessage({ type: "reprieve", ...payload });
+    bc.close();
+  } catch {
+    /* noop */
+  }
+}
 
 function Girigo() {
   const [stage, setStage] = useState<Stage>(() => {
@@ -60,6 +85,18 @@ function Girigo() {
       {stage === "granted" && (
         <Granted
           onContinue={() => {
+            const from = getPassedFrom();
+            if (from) {
+              broadcastReprieve(from);
+              // clean the URL so a refresh doesn't re-fire the reprieve
+              try {
+                const u = new URL(window.location.href);
+                u.searchParams.delete("passedFrom");
+                window.history.replaceState({}, "", u.toString());
+              } catch {
+                /* noop */
+              }
+            }
             localStorage.setItem(CURSE_KEY, String(Date.now() + CURSE_MS));
             setStage("curse");
           }}
@@ -485,6 +522,7 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
       : "";
 
   useEffect(() => {
+    if (phase === "transferred") return;
     let raf: number;
     const tick = () => {
       const end = Number(localStorage.getItem(CURSE_KEY));
@@ -493,7 +531,59 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [phase]);
+
+  // Cross-tab / cross-window reprieve listener: if another ritual was completed
+  // with ?passedFrom=<this user's name>, the curse jumps to them.
+  useEffect(() => {
+    if (phase === "transferred") return;
+    const target = (name || "anonymous").trim();
+    const curseStart = (() => {
+      const end = Number(localStorage.getItem(CURSE_KEY));
+      return end ? end - CURSE_MS : 0;
+    })();
+
+    const accept = (payload: { target?: string; at?: number } | null) => {
+      if (!payload) return;
+      if (!payload.target || payload.target !== target) return;
+      if (typeof payload.at === "number" && payload.at < curseStart) return;
+      completeTransfer();
+    };
+
+    // Check for a reprieve that landed before this component mounted
+    try {
+      const raw = localStorage.getItem(REPRIEVE_KEY);
+      if (raw) accept(JSON.parse(raw));
+    } catch {
+      /* noop */
+    }
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== REPRIEVE_KEY || !e.newValue) return;
+      try {
+        accept(JSON.parse(e.newValue));
+      } catch {
+        /* noop */
+      }
+    };
+    window.addEventListener("storage", onStorage);
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel(CHANNEL_NAME);
+      bc.onmessage = (ev) => {
+        if (ev.data?.type === "reprieve") accept(ev.data);
+      };
+    } catch {
+      /* noop */
+    }
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      bc?.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, phase]);
 
   // Ominous heartbeat — speeds up while passing
   useEffect(() => {
@@ -584,6 +674,7 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
     playStatic();
     setPhase("transferred");
     localStorage.removeItem(CURSE_KEY);
+    localStorage.removeItem(REPRIEVE_KEY);
     setTimeout(() => onReset(), 3200);
   };
 
