@@ -18,6 +18,32 @@ function getPassedFrom(): string | null {
   return v ? v.trim() : null;
 }
 
+async function postReprieveServer(target: string) {
+  try {
+    await fetch("/api/reprieve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target }),
+      keepalive: true,
+    });
+  } catch {
+    /* noop */
+  }
+}
+
+async function clearReprieveServer(target: string) {
+  try {
+    await fetch("/api/reprieve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target, clear: true }),
+      keepalive: true,
+    });
+  } catch {
+    /* noop */
+  }
+}
+
 function broadcastReprieve(target: string) {
   const payload = { target, at: Date.now() };
   try {
@@ -32,6 +58,8 @@ function broadcastReprieve(target: string) {
   } catch {
     /* noop */
   }
+  // Fire-and-forget server-side signal for cross-device sync
+  void postReprieveServer(target);
 }
 
 function Girigo() {
