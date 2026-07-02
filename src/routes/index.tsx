@@ -734,6 +734,7 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
     setPhase("transferred");
     localStorage.removeItem(CURSE_KEY);
     localStorage.removeItem(REPRIEVE_KEY);
+    void clearReprieveServer((name || "anonymous").trim());
     setTimeout(() => onReset(), 3200);
   };
 
