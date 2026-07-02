@@ -18,6 +18,32 @@ function getPassedFrom(): string | null {
   return v ? v.trim() : null;
 }
 
+async function postReprieveServer(target: string) {
+  try {
+    await fetch("/api/reprieve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target }),
+      keepalive: true,
+    });
+  } catch {
+    /* noop */
+  }
+}
+
+async function clearReprieveServer(target: string) {
+  try {
+    await fetch("/api/reprieve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target, clear: true }),
+      keepalive: true,
+    });
+  } catch {
+    /* noop */
+  }
+}
+
 function broadcastReprieve(target: string) {
   const payload = { target, at: Date.now() };
   try {
@@ -32,6 +58,8 @@ function broadcastReprieve(target: string) {
   } catch {
     /* noop */
   }
+  // Fire-and-forget server-side signal for cross-device sync
+  void postReprieveServer(target);
 }
 
 function Girigo() {
@@ -545,7 +573,11 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
 
     const accept = (payload: { target?: string; at?: number } | null) => {
       if (!payload) return;
-      if (!payload.target || payload.target !== target) return;
+      if (
+        !payload.target ||
+        payload.target.toLowerCase() !== target.toLowerCase()
+      )
+        return;
       if (typeof payload.at === "number" && payload.at < curseStart) return;
       completeTransfer();
     };
@@ -578,7 +610,34 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
       /* noop */
     }
 
+    // Cross-device sync: poll the mock server endpoint
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch(
+          `/api/reprieve?target=${encodeURIComponent(target)}`,
+          { cache: "no-store" },
+        );
+        if (res.ok) {
+          const json = (await res.json()) as {
+            reprieved: boolean;
+            at: number | null;
+          };
+          if (json.reprieved && json.at) {
+            accept({ target, at: json.at });
+          }
+        }
+      } catch {
+        /* noop */
+      }
+    };
+    void poll();
+    const pollId = window.setInterval(poll, 2500);
+
     return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
       window.removeEventListener("storage", onStorage);
       bc?.close();
     };
@@ -675,6 +734,7 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
     setPhase("transferred");
     localStorage.removeItem(CURSE_KEY);
     localStorage.removeItem(REPRIEVE_KEY);
+    void clearReprieveServer((name || "anonymous").trim());
     setTimeout(() => onReset(), 3200);
   };
 
