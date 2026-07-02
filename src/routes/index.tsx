@@ -573,7 +573,11 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
 
     const accept = (payload: { target?: string; at?: number } | null) => {
       if (!payload) return;
-      if (!payload.target || payload.target !== target) return;
+      if (
+        !payload.target ||
+        payload.target.toLowerCase() !== target.toLowerCase()
+      )
+        return;
       if (typeof payload.at === "number" && payload.at < curseStart) return;
       completeTransfer();
     };
@@ -606,7 +610,34 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
       /* noop */
     }
 
+    // Cross-device sync: poll the mock server endpoint
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch(
+          `/api/reprieve?target=${encodeURIComponent(target)}`,
+          { cache: "no-store" },
+        );
+        if (res.ok) {
+          const json = (await res.json()) as {
+            reprieved: boolean;
+            at: number | null;
+          };
+          if (json.reprieved && json.at) {
+            accept({ target, at: json.at });
+          }
+        }
+      } catch {
+        /* noop */
+      }
+    };
+    void poll();
+    const pollId = window.setInterval(poll, 2500);
+
     return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
       window.removeEventListener("storage", onStorage);
       bc?.close();
     };
