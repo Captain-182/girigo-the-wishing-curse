@@ -7,7 +7,32 @@ export const Route = createFileRoute("/")({
 
 type Stage = "landing" | "ritual" | "transmitting" | "granted" | "curse";
 const CURSE_KEY = "girigo:curse_end";
+const REPRIEVE_KEY = "girigo:reprieve";
+const CHANNEL_NAME = "girigo:sync";
 const CURSE_MS = 24 * 60 * 60 * 1000;
+
+function getPassedFrom(): string | null {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search);
+  const v = p.get("passedFrom");
+  return v ? v.trim() : null;
+}
+
+function broadcastReprieve(target: string) {
+  const payload = { target, at: Date.now() };
+  try {
+    localStorage.setItem(REPRIEVE_KEY, JSON.stringify(payload));
+  } catch {
+    /* noop */
+  }
+  try {
+    const bc = new BroadcastChannel(CHANNEL_NAME);
+    bc.postMessage({ type: "reprieve", ...payload });
+    bc.close();
+  } catch {
+    /* noop */
+  }
+}
 
 function Girigo() {
   const [stage, setStage] = useState<Stage>(() => {
