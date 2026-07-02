@@ -674,6 +674,7 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
     playStatic();
     setPhase("transferred");
     localStorage.removeItem(CURSE_KEY);
+    localStorage.removeItem(REPRIEVE_KEY);
     setTimeout(() => onReset(), 3200);
   };
 
