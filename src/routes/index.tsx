@@ -1,15 +1,25 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 
 export const Route = createFileRoute("/")({
   component: Girigo,
 });
 
-type Stage = "landing" | "ritual" | "transmitting" | "granted" | "curse";
-const CURSE_KEY = "girigo:curse_end";
-const REPRIEVE_KEY = "girigo:reprieve";
-const CHANNEL_NAME = "girigo:sync";
+type Stage = "landing" | "ritual" | "transmitting" | "granted" | "curse" | "prayer";
+const NAME_KEY = "girigo:name";
+const ADMIN_PASSWORD = "girigo-admin";
 const CURSE_MS = 24 * 60 * 60 * 1000;
+
+type Session = {
+  name: string;
+  startedAt: number;
+  endAt: number;
+  paused: boolean;
+  pausedRemaining: number | null;
+  reprieved: boolean;
+  reprievedAt: number | null;
+  updatedAt: number;
+};
 
 function getPassedFrom(): string | null {
   if (typeof window === "undefined") return null;
@@ -18,12 +28,25 @@ function getPassedFrom(): string | null {
   return v ? v.trim() : null;
 }
 
-async function postReprieveServer(target: string) {
+async function apiGetSession(name: string): Promise<Session | null> {
   try {
-    await fetch("/api/reprieve", {
+    const res = await fetch(`/api/sessions?name=${encodeURIComponent(name)}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { session: Session | null };
+    return json.session;
+  } catch {
+    return null;
+  }
+}
+
+async function apiPost(body: Record<string, unknown>) {
+  try {
+    await fetch("/api/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ target }),
+      body: JSON.stringify(body),
       keepalive: true,
     });
   } catch {
@@ -31,59 +54,65 @@ async function postReprieveServer(target: string) {
   }
 }
 
-async function clearReprieveServer(target: string) {
-  try {
-    await fetch("/api/reprieve", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ target, clear: true }),
-      keepalive: true,
-    });
-  } catch {
-    /* noop */
-  }
+function sessionRemaining(s: Session): number {
+  if (s.reprieved) return 0;
+  if (s.paused) return Math.max(0, s.pausedRemaining ?? 0);
+  return Math.max(0, s.endAt - Date.now());
 }
 
-function broadcastReprieve(target: string) {
-  const payload = { target, at: Date.now() };
-  try {
-    localStorage.setItem(REPRIEVE_KEY, JSON.stringify(payload));
-  } catch {
-    /* noop */
-  }
-  try {
-    const bc = new BroadcastChannel(CHANNEL_NAME);
-    bc.postMessage({ type: "reprieve", ...payload });
-    bc.close();
-  } catch {
-    /* noop */
-  }
-  // Fire-and-forget server-side signal for cross-device sync
-  void postReprieveServer(target);
+function sessionActive(s: Session): boolean {
+  if (s.reprieved) return false;
+  return sessionRemaining(s) > 0 || s.paused;
 }
 
 function Girigo() {
-  const [stage, setStage] = useState<Stage>(() => {
-    if (typeof window === "undefined") return "landing";
-    const end = Number(window.localStorage.getItem(CURSE_KEY));
-    return end && end > Date.now() ? "curse" : "landing";
-  });
+  const [stage, setStage] = useState<Stage>("landing");
   const [name, setName] = useState("");
   const [birth, setBirth] = useState("");
+  const [booted, setBooted] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
 
-  // Safety net after hydration: honor active curse, clean up expired entry
+  // On mount: hydrate from server (source of truth)
   useEffect(() => {
-    const end = Number(localStorage.getItem(CURSE_KEY));
-    if (end && end > Date.now()) {
-      setStage((s) => (s === "curse" ? s : "curse"));
-    } else if (end) {
-      localStorage.removeItem(CURSE_KEY);
-    }
+    let cancelled = false;
+    (async () => {
+      const storedName = localStorage.getItem(NAME_KEY);
+      if (!storedName) {
+        if (!cancelled) setBooted(true);
+        return;
+      }
+      const s = await apiGetSession(storedName);
+      if (cancelled) return;
+      if (s && sessionActive(s)) {
+        setName(storedName);
+        setStage("curse");
+      } else {
+        // stale/expired
+        localStorage.removeItem(NAME_KEY);
+      }
+      setBooted(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  if (!booted) {
+    return (
+      <main className="relative min-h-screen bg-background text-foreground">
+        <div className="pointer-events-none absolute inset-0 noise opacity-40" />
+        <div className="pointer-events-none absolute inset-0 scanlines opacity-30" />
+        <div className="flex min-h-screen items-center justify-center">
+          <div className="font-display text-xs tracking-[0.6em] text-muted-foreground animate-flicker">
+            SUMMONING…
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
-      {/* atmospheric layers */}
       <div className="pointer-events-none absolute inset-0 noise opacity-40" />
       <div className="pointer-events-none absolute inset-0 scanlines opacity-30" />
       <div
@@ -93,7 +122,7 @@ function Girigo() {
             "radial-gradient(ellipse at 50% 0%, oklch(0.55 0.25 27 / 0.12), transparent 60%), radial-gradient(ellipse at 50% 100%, oklch(0.55 0.25 27 / 0.08), transparent 60%)",
         }}
       />
-      <BrandMark />
+      <BrandMark onSecret={() => setAdminOpen(true)} />
 
       {stage === "landing" && (
         <Landing
@@ -112,11 +141,10 @@ function Girigo() {
       )}
       {stage === "granted" && (
         <Granted
-          onContinue={() => {
+          onContinue={async () => {
             const from = getPassedFrom();
             if (from) {
-              broadcastReprieve(from);
-              // clean the URL so a refresh doesn't re-fire the reprieve
+              await apiPost({ action: "reprieve", name: from });
               try {
                 const u = new URL(window.location.href);
                 u.searchParams.delete("passedFrom");
@@ -125,7 +153,9 @@ function Girigo() {
                 /* noop */
               }
             }
-            localStorage.setItem(CURSE_KEY, String(Date.now() + CURSE_MS));
+            const own = (name || "anonymous").trim();
+            localStorage.setItem(NAME_KEY, own);
+            await apiPost({ action: "start", name: own });
             setStage("curse");
           }}
         />
@@ -134,27 +164,56 @@ function Girigo() {
         <Curse
           name={name}
           onReset={() => {
-            localStorage.removeItem(CURSE_KEY);
+            localStorage.removeItem(NAME_KEY);
+            setName("");
+            setBirth("");
+            setStage("landing");
+          }}
+          onExpired={() => setStage("prayer")}
+        />
+      )}
+      {stage === "prayer" && (
+        <Prayer
+          onDone={() => {
+            localStorage.removeItem(NAME_KEY);
             setName("");
             setBirth("");
             setStage("landing");
           }}
         />
       )}
+
+      {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
     </main>
   );
 }
 
-function BrandMark() {
+/* ---------------- BRAND / SECRET TRIGGER ---------------- */
+function BrandMark({ onSecret }: { onSecret: () => void }) {
+  const tapsRef = useRef<number[]>([]);
+  const handleTap = () => {
+    const now = Date.now();
+    tapsRef.current = tapsRef.current.filter((t) => now - t < 3000);
+    tapsRef.current.push(now);
+    if (tapsRef.current.length >= 5) {
+      tapsRef.current = [];
+      onSecret();
+    }
+  };
   return (
-    <div className="pointer-events-none absolute left-1/2 top-6 z-20 -translate-x-1/2 select-none text-center">
+    <button
+      type="button"
+      onClick={handleTap}
+      className="absolute left-1/2 top-6 z-20 -translate-x-1/2 select-none text-center"
+      aria-label="Girigo"
+    >
       <div className="font-display text-xs tracking-[0.6em] text-muted-foreground animate-flicker">
         GIRIGO
       </div>
       <div className="mt-1 font-display text-[10px] tracking-[0.4em] text-primary/70">
         기리고
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -259,9 +318,7 @@ function Field({
   );
 }
 
-
 function PrayingHands() {
-  // Pixel-art praying hands rendered from a bitmap grid
   const grid = [
     "..........XX..XX..........",
     ".........XWWXXWWX.........",
@@ -323,34 +380,11 @@ function PrayingHands() {
   );
 }
 
-/* ---------------- RITUAL ---------------- */
+/* ---------------- RITUAL (fully simulated, no camera access) ---------------- */
 function Ritual({ onRecorded }: { onRecorded: () => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [hasCam, setHasCam] = useState(false);
   const [recording, setRecording] = useState(false);
   const [progress, setProgress] = useState(0);
   const RECORD_MS = 5000;
-
-  useEffect(() => {
-    let stream: MediaStream | null = null;
-    (async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
-          audio: false,
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          setHasCam(true);
-        }
-      } catch {
-        setHasCam(false);
-      }
-    })();
-    return () => {
-      stream?.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
 
   useEffect(() => {
     if (!recording) return;
@@ -379,20 +413,8 @@ function Ritual({ onRecorded }: { onRecorded: () => void }) {
       </div>
 
       <div className="relative aspect-[3/4] w-full overflow-hidden border border-border bg-black">
-        {hasCam ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="h-full w-full object-cover"
-            style={{ transform: "scaleX(-1)" }}
-          />
-        ) : (
-          <FeedPlaceholder />
-        )}
+        <SimulatedFeed />
 
-        {/* viewfinder overlay */}
         <div className="pointer-events-none absolute inset-0">
           <Corner className="left-3 top-3" />
           <Corner className="right-3 top-3 rotate-90" />
@@ -401,13 +423,8 @@ function Ritual({ onRecorded }: { onRecorded: () => void }) {
 
           <div className="absolute inset-x-0 top-3 flex items-center justify-between px-4 font-mono text-[10px] tracking-widest text-primary/80">
             <span className="flex items-center gap-1.5">
-              <span
-                className={
-                  "inline-block h-1.5 w-1.5 rounded-full " +
-                  (recording ? "bg-primary animate-pulse-blood" : "bg-primary/60")
-                }
-              />
-              {recording ? "REC" : "LIVE"}
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse-blood" />
+              {recording ? "REC" : "RECORDING"}
             </span>
             <span>GIRIGO-CH01</span>
           </div>
@@ -423,8 +440,11 @@ function Ritual({ onRecorded }: { onRecorded: () => void }) {
 
           <div className="absolute inset-x-0 bottom-3 px-4 font-mono text-[10px] tracking-widest text-primary/70">
             <div className="flex justify-between">
-              <span>◉ 0{Math.floor(progress * 5)}:0{Math.floor((progress * 30) % 60).toString().padStart(2, "0")}</span>
-              <span>{hasCam ? "SIGNAL LOCKED" : "SIM MODE"}</span>
+              <span>
+                ◉ 0{Math.floor(progress * 5)}:0
+                {Math.floor((progress * 30) % 60).toString().padStart(2, "0")}
+              </span>
+              <span>SIGNAL LOCKED</span>
             </div>
             <div className="mt-2 h-[2px] w-full bg-border">
               <div
@@ -434,7 +454,6 @@ function Ritual({ onRecorded }: { onRecorded: () => void }) {
             </div>
           </div>
 
-          {/* crosshair */}
           <div className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 border border-primary/40">
             <div className="absolute left-1/2 top-1/2 h-1 w-1 -translate-x-1/2 -translate-y-1/2 bg-primary" />
           </div>
@@ -467,19 +486,58 @@ function Corner({ className = "" }: { className?: string }) {
   );
 }
 
-function FeedPlaceholder() {
+function SimulatedFeed() {
+  // Canvas-based animated static noise + moving vignette so it *looks* like a live feed
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const W = (c.width = 160);
+    const H = (c.height = 213);
+    let raf = 0;
+    const draw = () => {
+      const img = ctx.createImageData(W, H);
+      const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const v = 20 + Math.random() * 60;
+        d[i] = v;
+        d[i + 1] = v * 0.6;
+        d[i + 2] = v * 0.55;
+        d[i + 3] = 255;
+      }
+      ctx.putImageData(img, 0, 0);
+      // dark vignette
+      const grd = ctx.createRadialGradient(W / 2, H / 2, 20, W / 2, H / 2, 140);
+      grd.addColorStop(0, "rgba(0,0,0,0)");
+      grd.addColorStop(1, "rgba(0,0,0,0.75)");
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, W, H);
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
   return (
-    <div className="relative flex h-full w-full items-center justify-center bg-gradient-to-b from-[oklch(0.08_0_0)] to-black">
-      <div className="text-center">
-        <div className="mx-auto h-16 w-16 rounded-full border border-primary/40 animate-pulse-blood" />
-        <div className="mt-4 font-mono text-[10px] tracking-[0.4em] text-muted-foreground">
-          CAMERA LIVE FEED
-        </div>
-        <div className="mt-1 font-mono text-[10px] tracking-[0.3em] text-primary/60 animate-flicker">
-          NO SIGNAL — SIMULATING
+    <>
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 h-full w-full"
+        style={{ filter: "blur(1px) contrast(1.1)" }}
+      />
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="text-center opacity-70">
+          <div className="mx-auto h-16 w-16 rounded-full border border-primary/40 animate-pulse-blood" />
+          <div className="mt-4 font-mono text-[10px] tracking-[0.4em] text-muted-foreground">
+            BACKGROUND CAPTURE
+          </div>
+          <div className="mt-1 font-mono text-[10px] tracking-[0.3em] text-primary/70 animate-flicker">
+            SUBJECT ACQUIRED
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -534,117 +592,65 @@ function Granted({ onContinue }: { onContinue: () => void }) {
 /* ---------------- CURSE COUNTDOWN ---------------- */
 type CursePhase = "countdown" | "passing" | "transferred";
 
-function Curse({ name, onReset }: { name: string; onReset: () => void }) {
-  const [remaining, setRemaining] = useState(() => {
-    const end = Number(localStorage.getItem(CURSE_KEY));
-    return Math.max(0, end - Date.now());
-  });
+function Curse({
+  name,
+  onReset,
+  onExpired,
+}: {
+  name: string;
+  onReset: () => void;
+  onExpired: () => void;
+}) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [tick, setTick] = useState(0);
   const [phase, setPhase] = useState<CursePhase>("countdown");
   const [copied, setCopied] = useState(false);
+  const target = (name || "anonymous").trim();
+  const expiredFiredRef = useRef(false);
 
   const shareUrl =
     typeof window !== "undefined"
       ? `${window.location.origin}${window.location.pathname}?passedFrom=${encodeURIComponent(
-          name || "anonymous",
+          target,
         )}`
       : "";
 
+  // Poll server for authoritative session state
   useEffect(() => {
     if (phase === "transferred") return;
-    let raf: number;
-    const tick = () => {
-      const end = Number(localStorage.getItem(CURSE_KEY));
-      setRemaining(Math.max(0, end - Date.now()));
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [phase]);
-
-  // Cross-tab / cross-window reprieve listener: if another ritual was completed
-  // with ?passedFrom=<this user's name>, the curse jumps to them.
-  useEffect(() => {
-    if (phase === "transferred") return;
-    const target = (name || "anonymous").trim();
-    const curseStart = (() => {
-      const end = Number(localStorage.getItem(CURSE_KEY));
-      return end ? end - CURSE_MS : 0;
-    })();
-
-    const accept = (payload: { target?: string; at?: number } | null) => {
-      if (!payload) return;
-      if (
-        !payload.target ||
-        payload.target.toLowerCase() !== target.toLowerCase()
-      )
-        return;
-      if (typeof payload.at === "number" && payload.at < curseStart) return;
-      completeTransfer();
-    };
-
-    // Check for a reprieve that landed before this component mounted
-    try {
-      const raw = localStorage.getItem(REPRIEVE_KEY);
-      if (raw) accept(JSON.parse(raw));
-    } catch {
-      /* noop */
-    }
-
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== REPRIEVE_KEY || !e.newValue) return;
-      try {
-        accept(JSON.parse(e.newValue));
-      } catch {
-        /* noop */
-      }
-    };
-    window.addEventListener("storage", onStorage);
-
-    let bc: BroadcastChannel | null = null;
-    try {
-      bc = new BroadcastChannel(CHANNEL_NAME);
-      bc.onmessage = (ev) => {
-        if (ev.data?.type === "reprieve") accept(ev.data);
-      };
-    } catch {
-      /* noop */
-    }
-
-    // Cross-device sync: poll the mock server endpoint
     let cancelled = false;
     const poll = async () => {
       if (cancelled) return;
-      try {
-        const res = await fetch(
-          `/api/reprieve?target=${encodeURIComponent(target)}`,
-          { cache: "no-store" },
-        );
-        if (res.ok) {
-          const json = (await res.json()) as {
-            reprieved: boolean;
-            at: number | null;
-          };
-          if (json.reprieved && json.at) {
-            accept({ target, at: json.at });
-          }
-        }
-      } catch {
-        /* noop */
+      const s = await apiGetSession(target);
+      if (cancelled) return;
+      setSession(s);
+      if (s?.reprieved) {
+        completeTransfer();
       }
     };
     void poll();
-    const pollId = window.setInterval(poll, 2500);
-
+    const id = window.setInterval(poll, 2000);
     return () => {
       cancelled = true;
-      window.clearInterval(pollId);
-      window.removeEventListener("storage", onStorage);
-      bc?.close();
+      window.clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, phase]);
+  }, [target, phase]);
 
-  // Ominous heartbeat — speeds up while passing
+  // Local tick for smooth display between polls
+  useEffect(() => {
+    if (phase === "transferred") return;
+    if (session?.paused) return; // frozen when paused
+    let raf: number;
+    const loop = () => {
+      setTick((t) => t + 1);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [phase, session?.paused]);
+
+  // Heartbeat audio
   useEffect(() => {
     if (phase === "transferred") return;
     const AC =
@@ -654,7 +660,6 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
     if (!AC) return;
     const ctx = new AC();
     ctx.resume().catch(() => {});
-
     const master = ctx.createGain();
     master.gain.value = phase === "passing" ? 0.5 : 0.35;
     const filter = ctx.createBiquadFilter();
@@ -686,7 +691,6 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
       setTimeout(schedule, interval);
     };
     schedule();
-
     return () => {
       stopped = true;
       ctx.close().catch(() => {});
@@ -729,20 +733,37 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
     }
   };
 
-  const completeTransfer = () => {
+  const completeTransfer = useCallback(() => {
+    if (phase === "transferred") return;
     playStatic();
     setPhase("transferred");
-    localStorage.removeItem(CURSE_KEY);
-    localStorage.removeItem(REPRIEVE_KEY);
-    void clearReprieveServer((name || "anonymous").trim());
-    setTimeout(() => onReset(), 3200);
-  };
+    void apiPost({ action: "reprieve", name: target });
+    setTimeout(() => {
+      localStorage.removeItem(NAME_KEY);
+      onReset();
+    }, 3200);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, target, onReset]);
+
+  const remaining = session ? sessionRemaining(session) : 0;
+  const paused = !!session?.paused;
+
+  // Fire zero-hit exactly once (only after we have a session and it's not paused)
+  useEffect(() => {
+    if (!session || paused) return;
+    if (phase !== "countdown") return;
+    if (remaining <= 0 && !expiredFiredRef.current) {
+      expiredFiredRef.current = true;
+      onExpired();
+    }
+  }, [session, paused, remaining, phase, onExpired]);
 
   const hh = Math.floor(remaining / 3600000);
   const mm = Math.floor((remaining % 3600000) / 60000);
   const ss = Math.floor((remaining % 60000) / 1000);
   const ms = Math.floor((remaining % 1000) / 10);
-  const expired = remaining <= 0;
+  // reference tick so react re-renders even when session doesn't change
+  void tick;
 
   return (
     <section className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 animate-fade-up">
@@ -751,7 +772,7 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
           THE CURSE IS BOUND
         </div>
         <div className="mt-3 font-display text-sm tracking-[0.4em] text-muted-foreground">
-          TIME UNTIL DESCENT
+          {paused ? "TIME SUSPENDED" : "TIME UNTIL DESCENT"}
         </div>
       </div>
 
@@ -763,7 +784,12 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
               "radial-gradient(circle, oklch(0.55 0.25 27 / 0.35), transparent 70%)",
           }}
         />
-        <div className="flex items-baseline justify-center gap-1 font-mono font-bold tabular-nums text-glow-blood">
+        <div
+          className={
+            "flex items-baseline justify-center gap-1 font-mono font-bold tabular-nums text-glow-blood " +
+            (paused ? "opacity-60" : "")
+          }
+        >
           <TimeBlock v={hh} />
           <Colon />
           <TimeBlock v={mm} />
@@ -773,13 +799,16 @@ function Curse({ name, onReset }: { name: string; onReset: () => void }) {
           <TimeBlock v={ms} small />
         </div>
         <div className="mt-3 flex justify-center gap-8 font-mono text-[10px] tracking-[0.4em] text-muted-foreground">
-          <span>HH</span><span>MM</span><span>SS</span><span>MS</span>
+          <span>HH</span>
+          <span>MM</span>
+          <span>SS</span>
+          <span>MS</span>
         </div>
       </div>
 
-      {expired && (
-        <div className="mt-10 font-display text-xl tracking-[0.5em] text-primary text-glow-blood animate-glitch">
-          THE DESCENT HAS BEGUN.
+      {paused && (
+        <div className="mt-8 font-mono text-[11px] tracking-[0.4em] text-primary/80 animate-flicker">
+          ▍▍ FROZEN BY UNSEEN HAND ▍▍
         </div>
       )}
 
@@ -931,11 +960,44 @@ function TransferFlash() {
   );
 }
 
+/* ---------------- PRAYER (countdown reached zero) ---------------- */
+function Prayer({ onDone }: { onDone: () => void }) {
+  return (
+    <section className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 animate-fade-up">
+      <div
+        className="pointer-events-none absolute inset-0 -z-10 blur-3xl"
+        style={{
+          background:
+            "radial-gradient(circle at 50% 40%, oklch(0.98 0 0 / 0.15), transparent 60%)",
+        }}
+      />
+      <PrayingHands />
+      <h2 className="mt-10 max-w-md text-center font-display text-2xl leading-relaxed tracking-[0.2em] text-glow-ghost">
+        Allah saved you,
+        <br />
+        go pray 2 nafl as thanks.
+      </h2>
+      <p className="mt-8 font-mono text-[10px] tracking-[0.4em] text-muted-foreground">
+        الحمد لله
+      </p>
+      <button
+        onClick={onDone}
+        className="btn-ominous mt-16 px-10 py-3 font-display text-[10px] tracking-[0.5em]"
+      >
+        RETURN
+      </button>
+    </section>
+  );
+}
 
 function TimeBlock({ v, small }: { v: number; small?: boolean }) {
   const str = v.toString().padStart(2, "0");
   return (
-    <span className={small ? "text-4xl md:text-5xl text-primary/80" : "text-6xl md:text-8xl"}>
+    <span
+      className={
+        small ? "text-4xl md:text-5xl text-primary/80" : "text-6xl md:text-8xl"
+      }
+    >
       {str}
     </span>
   );
@@ -950,5 +1012,277 @@ function Colon({ small }: { small?: boolean }) {
     >
       :
     </span>
+  );
+}
+
+/* ---------------- ADMIN PANEL ---------------- */
+function AdminPanel({ onClose }: { onClose: () => void }) {
+  const [pw, setPw] = useState("");
+  const [authed, setAuthed] = useState(false);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    if (!authed) return;
+    try {
+      const res = await fetch(
+        `/api/sessions?list=1&admin=${encodeURIComponent(pw)}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+      const json = (await res.json()) as { sessions: Session[] };
+      setSessions(json.sessions);
+    } catch {
+      /* noop */
+    }
+  }, [authed, pw]);
+
+  useEffect(() => {
+    if (!authed) return;
+    void refresh();
+    const id = window.setInterval(refresh, 2500);
+    return () => window.clearInterval(id);
+  }, [authed, refresh]);
+
+  const act = async (
+    name: string,
+    action: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    setBusy(`${name}:${action}`);
+    try {
+      await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, name, admin: pw, ...extra }),
+      });
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/90 p-4 backdrop-blur-md">
+      <div className="scanlines relative my-8 w-full max-w-2xl border border-primary/40 bg-[oklch(0.05_0_0)] p-6 shadow-[0_0_60px_oklch(0.55_0.25_27/0.3)]">
+        <button
+          onClick={onClose}
+          className="absolute right-3 top-3 font-mono text-[10px] tracking-widest text-muted-foreground hover:text-primary"
+        >
+          [ X ]
+        </button>
+        <div className="text-[10px] tracking-[0.5em] text-primary/80 animate-flicker">
+          ◉ RESTRICTED ACCESS
+        </div>
+        <h3 className="mt-2 font-display text-lg tracking-[0.3em] text-glow-ghost">
+          ADMIN CONTROL
+        </h3>
+
+        {!authed ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (pw === ADMIN_PASSWORD) {
+                setAuthed(true);
+                setError("");
+              } else {
+                setError("DENIED");
+              }
+            }}
+            className="mt-8 space-y-4"
+          >
+            <label className="block">
+              <span className="mb-2 block text-[10px] tracking-[0.4em] text-muted-foreground">
+                PASSWORD
+              </span>
+              <input
+                type="password"
+                value={pw}
+                onChange={(e) => setPw(e.target.value)}
+                autoFocus
+                className="w-full border-b border-border bg-transparent py-3 font-mono tracking-widest outline-none focus:border-primary"
+              />
+            </label>
+            {error && (
+              <div className="font-mono text-[10px] tracking-[0.4em] text-primary">
+                {error}
+              </div>
+            )}
+            <button
+              type="submit"
+              className="btn-ominous w-full py-3 font-display text-xs tracking-[0.5em]"
+            >
+              ENTER
+            </button>
+          </form>
+        ) : (
+          <div className="mt-6">
+            <div className="mb-3 flex items-center justify-between font-mono text-[10px] tracking-[0.35em] text-muted-foreground">
+              <span>ACTIVE SESSIONS ({sessions.length})</span>
+              <button
+                onClick={() => void refresh()}
+                className="text-primary/70 hover:text-primary"
+              >
+                REFRESH
+              </button>
+            </div>
+            {sessions.length === 0 && (
+              <div className="border border-border/60 p-6 text-center font-mono text-[10px] tracking-[0.3em] text-muted-foreground/70">
+                NO SOULS BOUND
+              </div>
+            )}
+            <ul className="space-y-3">
+              {sessions.map((s) => (
+                <SessionRow
+                  key={s.name}
+                  s={s}
+                  busy={busy}
+                  onPause={() => act(s.name, "pause")}
+                  onResume={() => act(s.name, "resume")}
+                  onExtend={(deltaMs) =>
+                    act(s.name, "extend", { deltaMs })
+                  }
+                  onReprieve={() => act(s.name, "reprieve")}
+                  onReset={() => act(s.name, "reset")}
+                />
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SessionRow({
+  s,
+  busy,
+  onPause,
+  onResume,
+  onExtend,
+  onReprieve,
+  onReset,
+}: {
+  s: Session;
+  busy: string | null;
+  onPause: () => void;
+  onResume: () => void;
+  onExtend: (deltaMs: number) => void;
+  onReprieve: () => void;
+  onReset: () => void;
+}) {
+  const rem = sessionRemaining(s);
+  const hh = Math.floor(rem / 3600000);
+  const mm = Math.floor((rem % 3600000) / 60000);
+  const ss = Math.floor((rem % 60000) / 1000);
+  const status = s.reprieved
+    ? "REPRIEVED"
+    : s.paused
+      ? "PAUSED"
+      : rem <= 0
+        ? "EXPIRED"
+        : "ACTIVE";
+  const isBusy = (a: string) => busy === `${s.name}:${a}`;
+  return (
+    <li className="border border-border/60 bg-black/40 p-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="min-w-0 truncate font-display text-sm tracking-[0.2em] text-glow-ghost">
+          {s.name}
+        </div>
+        <div
+          className={
+            "shrink-0 font-mono text-[9px] tracking-[0.4em] " +
+            (status === "ACTIVE"
+              ? "text-primary"
+              : status === "PAUSED"
+                ? "text-yellow-400"
+                : status === "REPRIEVED"
+                  ? "text-emerald-400"
+                  : "text-muted-foreground")
+          }
+        >
+          {status}
+        </div>
+      </div>
+      <div className="mt-1 font-mono text-xs tabular-nums text-muted-foreground">
+        {hh.toString().padStart(2, "0")}:
+        {mm.toString().padStart(2, "0")}:
+        {ss.toString().padStart(2, "0")}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {s.paused ? (
+          <AdminBtn onClick={onResume} loading={isBusy("resume")}>
+            RESUME
+          </AdminBtn>
+        ) : (
+          <AdminBtn
+            onClick={onPause}
+            loading={isBusy("pause")}
+            disabled={s.reprieved || rem <= 0}
+          >
+            PAUSE
+          </AdminBtn>
+        )}
+        <AdminBtn
+          onClick={() => onExtend(60 * 60 * 1000)}
+          loading={isBusy("extend")}
+        >
+          +1H
+        </AdminBtn>
+        <AdminBtn
+          onClick={() => onExtend(-60 * 60 * 1000)}
+          loading={isBusy("extend")}
+        >
+          −1H
+        </AdminBtn>
+        <AdminBtn
+          onClick={() => {
+            const raw = window.prompt("Modify hours (e.g. 2 or -0.5)", "1");
+            if (raw == null) return;
+            const n = Number(raw);
+            if (!Number.isFinite(n)) return;
+            onExtend(Math.round(n * 60 * 60 * 1000));
+          }}
+        >
+          ± HOURS
+        </AdminBtn>
+        <AdminBtn onClick={onReprieve} loading={isBusy("reprieve")}>
+          REPRIEVE
+        </AdminBtn>
+        <AdminBtn onClick={onReset} loading={isBusy("reset")} danger>
+          RESET
+        </AdminBtn>
+      </div>
+    </li>
+  );
+}
+
+function AdminBtn({
+  onClick,
+  children,
+  loading,
+  disabled,
+  danger,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+  loading?: boolean;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled || loading}
+      className={
+        "border px-2.5 py-1 font-mono text-[9px] tracking-[0.3em] transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
+        (danger
+          ? "border-primary/60 text-primary hover:bg-primary/10"
+          : "border-border text-muted-foreground hover:border-primary/60 hover:text-primary")
+      }
+    >
+      {loading ? "…" : children}
+    </button>
   );
 }
