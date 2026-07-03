@@ -10,11 +10,17 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiSessionsRouteImport } from './routes/api/sessions'
 import { Route as ApiReprieveRouteImport } from './routes/api/reprieve'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSessionsRoute = ApiSessionsRouteImport.update({
+  id: '/api/sessions',
+  path: '/api/sessions',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiReprieveRoute = ApiReprieveRouteImport.update({
@@ -26,27 +32,31 @@ const ApiReprieveRoute = ApiReprieveRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/reprieve': typeof ApiReprieveRoute
+  '/api/sessions': typeof ApiSessionsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/reprieve': typeof ApiReprieveRoute
+  '/api/sessions': typeof ApiSessionsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/reprieve': typeof ApiReprieveRoute
+  '/api/sessions': typeof ApiSessionsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/reprieve'
+  fullPaths: '/' | '/api/reprieve' | '/api/sessions'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/reprieve'
-  id: '__root__' | '/' | '/api/reprieve'
+  to: '/' | '/api/reprieve' | '/api/sessions'
+  id: '__root__' | '/' | '/api/reprieve' | '/api/sessions'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiReprieveRoute: typeof ApiReprieveRoute
+  ApiSessionsRoute: typeof ApiSessionsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -56,6 +66,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/sessions': {
+      id: '/api/sessions'
+      path: '/api/sessions'
+      fullPath: '/api/sessions'
+      preLoaderRoute: typeof ApiSessionsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/reprieve': {
@@ -71,17 +88,8 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiReprieveRoute: ApiReprieveRoute,
+  ApiSessionsRoute: ApiSessionsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
