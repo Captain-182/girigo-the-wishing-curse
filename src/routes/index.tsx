@@ -28,6 +28,36 @@ function getPassedFrom(): string | null {
   return v ? v.trim() : null;
 }
 
+function getUserParam(): string | null {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search);
+  const v = p.get("user");
+  return v ? v.trim() : null;
+}
+
+function setUserParam(name: string) {
+  if (typeof window === "undefined") return;
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.set("user", name);
+    u.searchParams.delete("passedFrom");
+    window.history.replaceState({}, "", u.toString());
+  } catch {
+    /* noop */
+  }
+}
+
+function clearUserParam() {
+  if (typeof window === "undefined") return;
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.delete("user");
+    window.history.replaceState({}, "", u.toString());
+  } catch {
+    /* noop */
+  }
+}
+
 async function apiGetSession(name: string): Promise<Session | null> {
   try {
     const res = await fetch(`/api/sessions?name=${encodeURIComponent(name)}`, {
@@ -72,23 +102,29 @@ function Girigo() {
   const [booted, setBooted] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
 
-  // On mount: hydrate from server (source of truth)
+  // On mount: URL ?user= is source of truth, then localStorage fallback.
+  // Server session is authoritative; localStorage can be wiped without escape.
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const urlName = getUserParam();
       const storedName = localStorage.getItem(NAME_KEY);
-      if (!storedName) {
+      const candidate = urlName || storedName;
+      if (!candidate) {
         if (!cancelled) setBooted(true);
         return;
       }
-      const s = await apiGetSession(storedName);
+      const s = await apiGetSession(candidate);
       if (cancelled) return;
       if (s && sessionActive(s)) {
-        setName(storedName);
+        localStorage.setItem(NAME_KEY, candidate);
+        setUserParam(candidate);
+        setName(candidate);
         setStage("curse");
       } else {
-        // stale/expired
+        // stale/expired — clean both surfaces
         localStorage.removeItem(NAME_KEY);
+        if (urlName) clearUserParam();
       }
       setBooted(true);
     })();
@@ -156,6 +192,7 @@ function Girigo() {
             const own = (name || "anonymous").trim();
             localStorage.setItem(NAME_KEY, own);
             await apiPost({ action: "start", name: own });
+            setUserParam(own);
             setStage("curse");
           }}
         />
@@ -165,6 +202,7 @@ function Girigo() {
           name={name}
           onReset={() => {
             localStorage.removeItem(NAME_KEY);
+            clearUserParam();
             setName("");
             setBirth("");
             setStage("landing");
@@ -176,6 +214,7 @@ function Girigo() {
         <Prayer
           onDone={() => {
             localStorage.removeItem(NAME_KEY);
+            clearUserParam();
             setName("");
             setBirth("");
             setStage("landing");
