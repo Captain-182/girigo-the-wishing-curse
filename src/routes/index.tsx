@@ -7,6 +7,7 @@ export const Route = createFileRoute("/")({
 
 type Stage = "landing" | "ritual" | "transmitting" | "granted" | "curse" | "prayer";
 const NAME_KEY = "girigo:name";
+const EXPIRES_KEY = "girigo:expires";
 const ADMIN_PASSWORD = "girigo-admin";
 const CURSE_MS = 24 * 60 * 60 * 1000;
 
@@ -35,11 +36,14 @@ function getUserParam(): string | null {
   return v ? v.trim() : null;
 }
 
-function setUserParam(name: string) {
+function setUserParam(name: string, expires?: number) {
   if (typeof window === "undefined") return;
   try {
     const u = new URL(window.location.href);
     u.searchParams.set("user", name);
+    if (typeof expires === "number" && Number.isFinite(expires)) {
+      u.searchParams.set("expires", String(expires));
+    }
     u.searchParams.delete("passedFrom");
     window.history.replaceState({}, "", u.toString());
   } catch {
@@ -52,7 +56,44 @@ function clearUserParam() {
   try {
     const u = new URL(window.location.href);
     u.searchParams.delete("user");
+    u.searchParams.delete("expires");
     window.history.replaceState({}, "", u.toString());
+  } catch {
+    /* noop */
+  }
+}
+
+function getExpiresParam(): number | null {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search);
+  const v = p.get("expires");
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function readStoredExpires(): number | null {
+  try {
+    const v = localStorage.getItem(EXPIRES_KEY);
+    if (!v) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistExpires(ts: number) {
+  try {
+    localStorage.setItem(EXPIRES_KEY, String(ts));
+  } catch {
+    /* noop */
+  }
+}
+
+function clearPersistedExpires() {
+  try {
+    localStorage.removeItem(EXPIRES_KEY);
   } catch {
     /* noop */
   }
@@ -101,28 +142,74 @@ function Girigo() {
   const [birth, setBirth] = useState("");
   const [booted, setBooted] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [endAt, setEndAt] = useState<number | null>(null);
 
-  // On mount: URL ?user= is source of truth, then localStorage fallback.
-  // Server session is authoritative; localStorage can be wiped without escape.
+  // On mount: timestamp-based resume.
+  // Priority: URL ?expires= → localStorage backup → server session fallback.
+  // If timestamp has passed → jump straight to prayer screen.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const urlName = getUserParam();
       const storedName = localStorage.getItem(NAME_KEY);
       const candidate = urlName || storedName;
+
+      const urlExp = getExpiresParam();
+      const storedExp = readStoredExpires();
+      const expCandidate = urlExp ?? storedExp;
+
       if (!candidate) {
+        // No user — nothing to resume.
+        if (expCandidate) {
+          clearPersistedExpires();
+          clearUserParam();
+        }
         if (!cancelled) setBooted(true);
         return;
       }
+
+      // If we have a timestamp, trust the math.
+      if (expCandidate != null) {
+        const now = Date.now();
+        if (now >= expCandidate) {
+          // Curse already ran out — user has been saved.
+          localStorage.removeItem(NAME_KEY);
+          clearPersistedExpires();
+          clearUserParam();
+          if (!cancelled) {
+            setName(candidate);
+            setStage("prayer");
+            setBooted(true);
+          }
+          return;
+        }
+        // Still ticking — restore state from timestamp.
+        localStorage.setItem(NAME_KEY, candidate);
+        persistExpires(expCandidate);
+        setUserParam(candidate, expCandidate);
+        if (!cancelled) {
+          setName(candidate);
+          setEndAt(expCandidate);
+          setStage("curse");
+          setBooted(true);
+        }
+        return;
+      }
+
+      // No timestamp anywhere — fall back to server session.
       const s = await apiGetSession(candidate);
       if (cancelled) return;
       if (s && sessionActive(s)) {
+        const serverEnd = s.paused
+          ? Date.now() + (s.pausedRemaining ?? 0)
+          : s.endAt;
         localStorage.setItem(NAME_KEY, candidate);
-        setUserParam(candidate);
+        persistExpires(serverEnd);
+        setUserParam(candidate, serverEnd);
         setName(candidate);
+        setEndAt(serverEnd);
         setStage("curse");
       } else {
-        // stale/expired — clean both surfaces
         localStorage.removeItem(NAME_KEY);
         if (urlName) clearUserParam();
       }
@@ -190,31 +277,43 @@ function Girigo() {
               }
             }
             const own = (name || "anonymous").trim();
+            const newEnd = Date.now() + CURSE_MS;
             localStorage.setItem(NAME_KEY, own);
+            persistExpires(newEnd);
             await apiPost({ action: "start", name: own });
-            setUserParam(own);
+            setUserParam(own, newEnd);
+            setEndAt(newEnd);
             setStage("curse");
           }}
         />
       )}
-      {stage === "curse" && (
+      {stage === "curse" && endAt != null && (
         <Curse
           name={name}
+          endAt={endAt}
           onReset={() => {
             localStorage.removeItem(NAME_KEY);
+            clearPersistedExpires();
             clearUserParam();
+            setEndAt(null);
             setName("");
             setBirth("");
             setStage("landing");
           }}
-          onExpired={() => setStage("prayer")}
+          onExpired={() => {
+            clearPersistedExpires();
+            clearUserParam();
+            setStage("prayer");
+          }}
         />
       )}
       {stage === "prayer" && (
         <Prayer
           onDone={() => {
             localStorage.removeItem(NAME_KEY);
+            clearPersistedExpires();
             clearUserParam();
+            setEndAt(null);
             setName("");
             setBirth("");
             setStage("landing");
@@ -633,10 +732,12 @@ type CursePhase = "countdown" | "passing" | "transferred";
 
 function Curse({
   name,
+  endAt,
   onReset,
   onExpired,
 }: {
   name: string;
+  endAt: number;
   onReset: () => void;
   onExpired: () => void;
 }) {
@@ -784,18 +885,22 @@ function Curse({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, target, onReset]);
 
-  const remaining = session ? sessionRemaining(session) : 0;
+  // Timestamp-based math: fixed endAt is the source of truth for the clock.
+  // Server session only overrides for pause (admin) and reprieve (transfer).
   const paused = !!session?.paused;
+  const remaining = paused
+    ? Math.max(0, session?.pausedRemaining ?? 0)
+    : Math.max(0, endAt - Date.now());
 
-  // Fire zero-hit exactly once (only after we have a session and it's not paused)
+  // Fire zero-hit exactly once
   useEffect(() => {
-    if (!session || paused) return;
+    if (paused) return;
     if (phase !== "countdown") return;
     if (remaining <= 0 && !expiredFiredRef.current) {
       expiredFiredRef.current = true;
       onExpired();
     }
-  }, [session, paused, remaining, phase, onExpired]);
+  }, [paused, remaining, phase, onExpired]);
 
   const hh = Math.floor(remaining / 3600000);
   const mm = Math.floor((remaining % 3600000) / 60000);
