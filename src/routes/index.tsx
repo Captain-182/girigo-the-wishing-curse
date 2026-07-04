@@ -28,6 +28,36 @@ function getPassedFrom(): string | null {
   return v ? v.trim() : null;
 }
 
+function getUserParam(): string | null {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search);
+  const v = p.get("user");
+  return v ? v.trim() : null;
+}
+
+function setUserParam(name: string) {
+  if (typeof window === "undefined") return;
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.set("user", name);
+    u.searchParams.delete("passedFrom");
+    window.history.replaceState({}, "", u.toString());
+  } catch {
+    /* noop */
+  }
+}
+
+function clearUserParam() {
+  if (typeof window === "undefined") return;
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.delete("user");
+    window.history.replaceState({}, "", u.toString());
+  } catch {
+    /* noop */
+  }
+}
+
 async function apiGetSession(name: string): Promise<Session | null> {
   try {
     const res = await fetch(`/api/sessions?name=${encodeURIComponent(name)}`, {
