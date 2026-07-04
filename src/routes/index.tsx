@@ -142,28 +142,74 @@ function Girigo() {
   const [birth, setBirth] = useState("");
   const [booted, setBooted] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [endAt, setEndAt] = useState<number | null>(null);
 
-  // On mount: URL ?user= is source of truth, then localStorage fallback.
-  // Server session is authoritative; localStorage can be wiped without escape.
+  // On mount: timestamp-based resume.
+  // Priority: URL ?expires= → localStorage backup → server session fallback.
+  // If timestamp has passed → jump straight to prayer screen.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const urlName = getUserParam();
       const storedName = localStorage.getItem(NAME_KEY);
       const candidate = urlName || storedName;
+
+      const urlExp = getExpiresParam();
+      const storedExp = readStoredExpires();
+      const expCandidate = urlExp ?? storedExp;
+
       if (!candidate) {
+        // No user — nothing to resume.
+        if (expCandidate) {
+          clearPersistedExpires();
+          clearUserParam();
+        }
         if (!cancelled) setBooted(true);
         return;
       }
+
+      // If we have a timestamp, trust the math.
+      if (expCandidate != null) {
+        const now = Date.now();
+        if (now >= expCandidate) {
+          // Curse already ran out — user has been saved.
+          localStorage.removeItem(NAME_KEY);
+          clearPersistedExpires();
+          clearUserParam();
+          if (!cancelled) {
+            setName(candidate);
+            setStage("prayer");
+            setBooted(true);
+          }
+          return;
+        }
+        // Still ticking — restore state from timestamp.
+        localStorage.setItem(NAME_KEY, candidate);
+        persistExpires(expCandidate);
+        setUserParam(candidate, expCandidate);
+        if (!cancelled) {
+          setName(candidate);
+          setEndAt(expCandidate);
+          setStage("curse");
+          setBooted(true);
+        }
+        return;
+      }
+
+      // No timestamp anywhere — fall back to server session.
       const s = await apiGetSession(candidate);
       if (cancelled) return;
       if (s && sessionActive(s)) {
+        const serverEnd = s.paused
+          ? Date.now() + (s.pausedRemaining ?? 0)
+          : s.endAt;
         localStorage.setItem(NAME_KEY, candidate);
-        setUserParam(candidate);
+        persistExpires(serverEnd);
+        setUserParam(candidate, serverEnd);
         setName(candidate);
+        setEndAt(serverEnd);
         setStage("curse");
       } else {
-        // stale/expired — clean both surfaces
         localStorage.removeItem(NAME_KEY);
         if (urlName) clearUserParam();
       }
