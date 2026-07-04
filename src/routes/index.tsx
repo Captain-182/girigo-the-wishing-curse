@@ -732,10 +732,12 @@ type CursePhase = "countdown" | "passing" | "transferred";
 
 function Curse({
   name,
+  endAt,
   onReset,
   onExpired,
 }: {
   name: string;
+  endAt: number;
   onReset: () => void;
   onExpired: () => void;
 }) {
