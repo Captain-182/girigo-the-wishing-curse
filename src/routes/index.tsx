@@ -202,6 +202,7 @@ function Girigo() {
           name={name}
           onReset={() => {
             localStorage.removeItem(NAME_KEY);
+            clearUserParam();
             setName("");
             setBirth("");
             setStage("landing");
@@ -213,6 +214,7 @@ function Girigo() {
         <Prayer
           onDone={() => {
             localStorage.removeItem(NAME_KEY);
+            clearUserParam();
             setName("");
             setBirth("");
             setStage("landing");
