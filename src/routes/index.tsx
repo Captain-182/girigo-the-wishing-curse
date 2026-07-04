@@ -36,11 +36,14 @@ function getUserParam(): string | null {
   return v ? v.trim() : null;
 }
 
-function setUserParam(name: string) {
+function setUserParam(name: string, expires?: number) {
   if (typeof window === "undefined") return;
   try {
     const u = new URL(window.location.href);
     u.searchParams.set("user", name);
+    if (typeof expires === "number" && Number.isFinite(expires)) {
+      u.searchParams.set("expires", String(expires));
+    }
     u.searchParams.delete("passedFrom");
     window.history.replaceState({}, "", u.toString());
   } catch {
@@ -53,7 +56,44 @@ function clearUserParam() {
   try {
     const u = new URL(window.location.href);
     u.searchParams.delete("user");
+    u.searchParams.delete("expires");
     window.history.replaceState({}, "", u.toString());
+  } catch {
+    /* noop */
+  }
+}
+
+function getExpiresParam(): number | null {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search);
+  const v = p.get("expires");
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function readStoredExpires(): number | null {
+  try {
+    const v = localStorage.getItem(EXPIRES_KEY);
+    if (!v) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistExpires(ts: number) {
+  try {
+    localStorage.setItem(EXPIRES_KEY, String(ts));
+  } catch {
+    /* noop */
+  }
+}
+
+function clearPersistedExpires() {
+  try {
+    localStorage.removeItem(EXPIRES_KEY);
   } catch {
     /* noop */
   }
