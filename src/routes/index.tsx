@@ -7,6 +7,7 @@ export const Route = createFileRoute("/")({
 
 type Stage = "landing" | "ritual" | "transmitting" | "granted" | "curse" | "prayer";
 const NAME_KEY = "girigo:name";
+const EXPIRES_KEY = "girigo:expires";
 const ADMIN_PASSWORD = "girigo-admin";
 const CURSE_MS = 24 * 60 * 60 * 1000;
 
