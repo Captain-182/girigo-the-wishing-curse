@@ -277,31 +277,43 @@ function Girigo() {
               }
             }
             const own = (name || "anonymous").trim();
+            const newEnd = Date.now() + CURSE_MS;
             localStorage.setItem(NAME_KEY, own);
+            persistExpires(newEnd);
             await apiPost({ action: "start", name: own });
-            setUserParam(own);
+            setUserParam(own, newEnd);
+            setEndAt(newEnd);
             setStage("curse");
           }}
         />
       )}
-      {stage === "curse" && (
+      {stage === "curse" && endAt != null && (
         <Curse
           name={name}
+          endAt={endAt}
           onReset={() => {
             localStorage.removeItem(NAME_KEY);
+            clearPersistedExpires();
             clearUserParam();
+            setEndAt(null);
             setName("");
             setBirth("");
             setStage("landing");
           }}
-          onExpired={() => setStage("prayer")}
+          onExpired={() => {
+            clearPersistedExpires();
+            clearUserParam();
+            setStage("prayer");
+          }}
         />
       )}
       {stage === "prayer" && (
         <Prayer
           onDone={() => {
             localStorage.removeItem(NAME_KEY);
+            clearPersistedExpires();
             clearUserParam();
+            setEndAt(null);
             setName("");
             setBirth("");
             setStage("landing");
