@@ -885,18 +885,22 @@ function Curse({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, target, onReset]);
 
-  const remaining = session ? sessionRemaining(session) : 0;
+  // Timestamp-based math: fixed endAt is the source of truth for the clock.
+  // Server session only overrides for pause (admin) and reprieve (transfer).
   const paused = !!session?.paused;
+  const remaining = paused
+    ? Math.max(0, session?.pausedRemaining ?? 0)
+    : Math.max(0, endAt - Date.now());
 
-  // Fire zero-hit exactly once (only after we have a session and it's not paused)
+  // Fire zero-hit exactly once
   useEffect(() => {
-    if (!session || paused) return;
+    if (paused) return;
     if (phase !== "countdown") return;
     if (remaining <= 0 && !expiredFiredRef.current) {
       expiredFiredRef.current = true;
       onExpired();
     }
-  }, [session, paused, remaining, phase, onExpired]);
+  }, [paused, remaining, phase, onExpired]);
 
   const hh = Math.floor(remaining / 3600000);
   const mm = Math.floor((remaining % 3600000) / 60000);
