@@ -192,6 +192,7 @@ function Girigo() {
             const own = (name || "anonymous").trim();
             localStorage.setItem(NAME_KEY, own);
             await apiPost({ action: "start", name: own });
+            setUserParam(own);
             setStage("curse");
           }}
         />
