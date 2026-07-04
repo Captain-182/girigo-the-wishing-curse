@@ -102,23 +102,29 @@ function Girigo() {
   const [booted, setBooted] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
 
-  // On mount: hydrate from server (source of truth)
+  // On mount: URL ?user= is source of truth, then localStorage fallback.
+  // Server session is authoritative; localStorage can be wiped without escape.
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const urlName = getUserParam();
       const storedName = localStorage.getItem(NAME_KEY);
-      if (!storedName) {
+      const candidate = urlName || storedName;
+      if (!candidate) {
         if (!cancelled) setBooted(true);
         return;
       }
-      const s = await apiGetSession(storedName);
+      const s = await apiGetSession(candidate);
       if (cancelled) return;
       if (s && sessionActive(s)) {
-        setName(storedName);
+        localStorage.setItem(NAME_KEY, candidate);
+        setUserParam(candidate);
+        setName(candidate);
         setStage("curse");
       } else {
-        // stale/expired
+        // stale/expired — clean both surfaces
         localStorage.removeItem(NAME_KEY);
+        if (urlName) clearUserParam();
       }
       setBooted(true);
     })();
