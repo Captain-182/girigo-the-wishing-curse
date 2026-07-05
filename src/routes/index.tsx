@@ -187,6 +187,8 @@ function Girigo() {
         localStorage.setItem(NAME_KEY, candidate);
         persistExpires(expCandidate);
         setUserParam(candidate, expCandidate);
+        // Register with server so admin panel can see & control this session.
+        void apiPost({ action: "register", name: candidate, endAt: expCandidate });
         if (!cancelled) {
           setName(candidate);
           setEndAt(expCandidate);
