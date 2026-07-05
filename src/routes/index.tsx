@@ -740,11 +740,13 @@ type CursePhase = "countdown" | "passing" | "transferred";
 function Curse({
   name,
   endAt,
+  onEndAtChange,
   onReset,
   onExpired,
 }: {
   name: string;
   endAt: number;
+  onEndAtChange: (next: number) => void;
   onReset: () => void;
   onExpired: () => void;
 }) {
@@ -754,6 +756,8 @@ function Curse({
   const [copied, setCopied] = useState(false);
   const target = (name || "anonymous").trim();
   const expiredFiredRef = useRef(false);
+  const endAtRef = useRef(endAt);
+  endAtRef.current = endAt;
 
   const shareUrl =
     typeof window !== "undefined"
@@ -762,7 +766,7 @@ function Curse({
         )}`
       : "";
 
-  // Poll server for authoritative session state
+  // Poll server for authoritative session state every 2.5s
   useEffect(() => {
     if (phase === "transferred") return;
     let cancelled = false;
@@ -770,13 +774,25 @@ function Curse({
       if (cancelled) return;
       const s = await apiGetSession(target);
       if (cancelled) return;
+      if (!s) {
+        // Server forgot us (cold start). Re-register with our known endAt.
+        void apiPost({ action: "register", name: target, endAt: endAtRef.current });
+        return;
+      }
       setSession(s);
-      if (s?.reprieved) {
+      if (s.reprieved) {
         completeTransfer();
+        return;
+      }
+      // Admin override sync: if server endAt drifted from ours (extend/resume),
+      // adopt the server value so the clock instantly reflects the command.
+      if (!s.paused && Math.abs(s.endAt - endAtRef.current) > 750) {
+        expiredFiredRef.current = false;
+        onEndAtChange(s.endAt);
       }
     };
     void poll();
-    const id = window.setInterval(poll, 2000);
+    const id = window.setInterval(poll, 2500);
     return () => {
       cancelled = true;
       window.clearInterval(id);
