@@ -94,6 +94,31 @@ export const Route = createFileRoute("/api/sessions")({
             store.set(key, s);
             return json({ ok: true, session: s });
           }
+          case "register": {
+            // Idempotent: register/resurrect a client-known session on the server
+            // (used after cold-starts or when resuming from a URL timestamp).
+            const endAt = Number(body.endAt);
+            if (!Number.isFinite(endAt)) {
+              return new Response("Invalid endAt", { status: 400 });
+            }
+            const existing = store.get(key);
+            if (existing && !existing.reprieved) {
+              // Server already has a live session — leave admin-modified state intact.
+              return json({ ok: true, session: existing });
+            }
+            const s: Session = {
+              name: rawName,
+              startedAt: existing?.startedAt ?? now,
+              endAt,
+              paused: false,
+              pausedRemaining: null,
+              reprieved: false,
+              reprievedAt: null,
+              updatedAt: now,
+            };
+            store.set(key, s);
+            return json({ ok: true, session: s });
+          }
           case "reprieve": {
             const existing = store.get(key);
             const s: Session = existing
