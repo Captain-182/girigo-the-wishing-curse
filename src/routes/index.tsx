@@ -293,6 +293,11 @@ function Girigo() {
         <Curse
           name={name}
           endAt={endAt}
+          onEndAtChange={(next) => {
+            setEndAt(next);
+            persistExpires(next);
+            setUserParam((name || "anonymous").trim(), next);
+          }}
           onReset={() => {
             localStorage.removeItem(NAME_KEY);
             clearPersistedExpires();
