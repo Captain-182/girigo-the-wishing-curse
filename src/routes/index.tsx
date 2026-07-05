@@ -187,6 +187,8 @@ function Girigo() {
         localStorage.setItem(NAME_KEY, candidate);
         persistExpires(expCandidate);
         setUserParam(candidate, expCandidate);
+        // Register with server so admin panel can see & control this session.
+        void apiPost({ action: "register", name: candidate, endAt: expCandidate });
         if (!cancelled) {
           setName(candidate);
           setEndAt(expCandidate);
@@ -291,6 +293,11 @@ function Girigo() {
         <Curse
           name={name}
           endAt={endAt}
+          onEndAtChange={(next) => {
+            setEndAt(next);
+            persistExpires(next);
+            setUserParam((name || "anonymous").trim(), next);
+          }}
           onReset={() => {
             localStorage.removeItem(NAME_KEY);
             clearPersistedExpires();
@@ -733,11 +740,13 @@ type CursePhase = "countdown" | "passing" | "transferred";
 function Curse({
   name,
   endAt,
+  onEndAtChange,
   onReset,
   onExpired,
 }: {
   name: string;
   endAt: number;
+  onEndAtChange: (next: number) => void;
   onReset: () => void;
   onExpired: () => void;
 }) {
@@ -747,6 +756,8 @@ function Curse({
   const [copied, setCopied] = useState(false);
   const target = (name || "anonymous").trim();
   const expiredFiredRef = useRef(false);
+  const endAtRef = useRef(endAt);
+  endAtRef.current = endAt;
 
   const shareUrl =
     typeof window !== "undefined"
@@ -755,7 +766,7 @@ function Curse({
         )}`
       : "";
 
-  // Poll server for authoritative session state
+  // Poll server for authoritative session state every 2.5s
   useEffect(() => {
     if (phase === "transferred") return;
     let cancelled = false;
@@ -763,13 +774,25 @@ function Curse({
       if (cancelled) return;
       const s = await apiGetSession(target);
       if (cancelled) return;
+      if (!s) {
+        // Server forgot us (cold start). Re-register with our known endAt.
+        void apiPost({ action: "register", name: target, endAt: endAtRef.current });
+        return;
+      }
       setSession(s);
-      if (s?.reprieved) {
+      if (s.reprieved) {
         completeTransfer();
+        return;
+      }
+      // Admin override sync: if server endAt drifted from ours (extend/resume),
+      // adopt the server value so the clock instantly reflects the command.
+      if (!s.paused && Math.abs(s.endAt - endAtRef.current) > 750) {
+        expiredFiredRef.current = false;
+        onEndAtChange(s.endAt);
       }
     };
     void poll();
-    const id = window.setInterval(poll, 2000);
+    const id = window.setInterval(poll, 2500);
     return () => {
       cancelled = true;
       window.clearInterval(id);
