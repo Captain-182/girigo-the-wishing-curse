@@ -1,30 +1,48 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-// In-memory mock store — per-worker, resets on cold start. Sufficient for demo.
+// Global session store backed by Postgres (girigo_sessions table).
+// All reads/writes go through supabaseAdmin (service_role) so every worker
+// instance and every device sees the same state — required for the cross-device
+// admin dashboard to work correctly.
 export type Session = {
   name: string;
   startedAt: number;
-  endAt: number; // ms epoch; when paused, this represents "would-be end if resumed now"
+  endAt: number;
   paused: boolean;
-  pausedRemaining: number | null; // ms remaining captured at pause time
+  pausedRemaining: number | null;
   reprieved: boolean;
   reprievedAt: number | null;
   updatedAt: number;
 };
 
-const g = globalThis as unknown as {
-  __girigoSessions?: Map<string, Session>;
+type Row = {
+  name_key: string;
+  name: string;
+  started_at: number;
+  end_at: number;
+  paused: boolean;
+  paused_remaining: number | null;
+  reprieved: boolean;
+  reprieved_at: number | null;
+  updated_at: number;
 };
-if (!g.__girigoSessions) g.__girigoSessions = new Map<string, Session>();
-const store = g.__girigoSessions;
 
 const CURSE_MS = 24 * 60 * 60 * 1000;
 const ADMIN_PASSWORD = "girigo-admin"; // demo-only
 
 const norm = (v: string) => v.trim().toLowerCase();
 
-function serialize(s: Session) {
-  return s;
+function rowToSession(r: Row): Session {
+  return {
+    name: r.name,
+    startedAt: Number(r.started_at),
+    endAt: Number(r.end_at),
+    paused: r.paused,
+    pausedRemaining: r.paused_remaining == null ? null : Number(r.paused_remaining),
+    reprieved: r.reprieved,
+    reprievedAt: r.reprieved_at == null ? null : Number(r.reprieved_at),
+    updatedAt: Number(r.updated_at),
+  };
 }
 
 function json(data: unknown, init: ResponseInit = {}) {
@@ -38,6 +56,47 @@ function json(data: unknown, init: ResponseInit = {}) {
   });
 }
 
+async function getRow(key: string): Promise<Row | null> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin
+    .from("girigo_sessions")
+    .select("*")
+    .eq("name_key", key)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as Row | null) ?? null;
+}
+
+async function upsertRow(row: Row): Promise<Row> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin
+    .from("girigo_sessions")
+    .upsert(row, { onConflict: "name_key" })
+    .select()
+    .single();
+  if (error) throw error;
+  return data as Row;
+}
+
+async function deleteRow(key: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { error } = await supabaseAdmin
+    .from("girigo_sessions")
+    .delete()
+    .eq("name_key", key);
+  if (error) throw error;
+}
+
+async function listRows(): Promise<Row[]> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin
+    .from("girigo_sessions")
+    .select("*")
+    .order("updated_at", { ascending: false });
+  if (error) throw error;
+  return (data as Row[]) ?? [];
+}
+
 export const Route = createFileRoute("/api/sessions")({
   server: {
     handlers: {
@@ -49,16 +108,13 @@ export const Route = createFileRoute("/api/sessions")({
           if (admin !== ADMIN_PASSWORD) {
             return new Response("Forbidden", { status: 403 });
           }
-          return json({
-            sessions: Array.from(store.values()).sort(
-              (a, b) => b.updatedAt - a.updatedAt,
-            ),
-          });
+          const rows = await listRows();
+          return json({ sessions: rows.map(rowToSession) });
         }
         const name = url.searchParams.get("name");
         if (!name) return json({ session: null });
-        const s = store.get(norm(name)) ?? null;
-        return json({ session: s ? serialize(s) : null });
+        const r = await getRow(norm(name));
+        return json({ session: r ? rowToSession(r) : null });
       },
       POST: async ({ request }) => {
         let body: Record<string, unknown> = {};
@@ -81,96 +137,100 @@ export const Route = createFileRoute("/api/sessions")({
 
         switch (action) {
           case "start": {
-            const s: Session = {
+            const row: Row = {
+              name_key: key,
               name: rawName,
-              startedAt: now,
-              endAt: now + CURSE_MS,
+              started_at: now,
+              end_at: now + CURSE_MS,
               paused: false,
-              pausedRemaining: null,
+              paused_remaining: null,
               reprieved: false,
-              reprievedAt: null,
-              updatedAt: now,
+              reprieved_at: null,
+              updated_at: now,
             };
-            store.set(key, s);
-            return json({ ok: true, session: s });
+            const saved = await upsertRow(row);
+            return json({ ok: true, session: rowToSession(saved) });
           }
           case "register": {
-            // Idempotent: register/resurrect a client-known session on the server
-            // (used after cold-starts or when resuming from a URL timestamp).
             const endAt = Number(body.endAt);
             if (!Number.isFinite(endAt)) {
               return new Response("Invalid endAt", { status: 400 });
             }
-            const existing = store.get(key);
+            const existing = await getRow(key);
             if (existing && !existing.reprieved) {
-              // Server already has a live session — leave admin-modified state intact.
-              return json({ ok: true, session: existing });
+              // Preserve any admin modifications.
+              return json({ ok: true, session: rowToSession(existing) });
             }
-            const s: Session = {
+            const row: Row = {
+              name_key: key,
               name: rawName,
-              startedAt: existing?.startedAt ?? now,
-              endAt,
+              started_at: existing?.started_at ?? now,
+              end_at: endAt,
               paused: false,
-              pausedRemaining: null,
+              paused_remaining: null,
               reprieved: false,
-              reprievedAt: null,
-              updatedAt: now,
+              reprieved_at: null,
+              updated_at: now,
             };
-            store.set(key, s);
-            return json({ ok: true, session: s });
+            const saved = await upsertRow(row);
+            return json({ ok: true, session: rowToSession(saved) });
           }
           case "reprieve": {
-            const existing = store.get(key);
-            const s: Session = existing
-              ? { ...existing, reprieved: true, reprievedAt: now, updatedAt: now }
-              : {
-                  name: rawName,
-                  startedAt: now,
-                  endAt: now,
-                  paused: false,
-                  pausedRemaining: null,
+            const existing = await getRow(key);
+            const row: Row = existing
+              ? {
+                  ...existing,
                   reprieved: true,
-                  reprievedAt: now,
-                  updatedAt: now,
+                  reprieved_at: now,
+                  updated_at: now,
+                }
+              : {
+                  name_key: key,
+                  name: rawName,
+                  started_at: now,
+                  end_at: now,
+                  paused: false,
+                  paused_remaining: null,
+                  reprieved: true,
+                  reprieved_at: now,
+                  updated_at: now,
                 };
-            store.set(key, s);
-            return json({ ok: true, session: s });
+            const saved = await upsertRow(row);
+            return json({ ok: true, session: rowToSession(saved) });
           }
           case "reset": {
             if (!requireAdmin()) return new Response("Forbidden", { status: 403 });
-            store.delete(key);
+            await deleteRow(key);
             return json({ ok: true, cleared: true });
           }
           case "pause": {
             if (!requireAdmin()) return new Response("Forbidden", { status: 403 });
-            const s = store.get(key);
+            const s = await getRow(key);
             if (!s) return new Response("Not found", { status: 404 });
-            if (s.paused) return json({ ok: true, session: s });
-            const remaining = Math.max(0, s.endAt - now);
-            const updated: Session = {
+            if (s.paused) return json({ ok: true, session: rowToSession(s) });
+            const remaining = Math.max(0, Number(s.end_at) - now);
+            const saved = await upsertRow({
               ...s,
               paused: true,
-              pausedRemaining: remaining,
-              updatedAt: now,
-            };
-            store.set(key, updated);
-            return json({ ok: true, session: updated });
+              paused_remaining: remaining,
+              updated_at: now,
+            });
+            return json({ ok: true, session: rowToSession(saved) });
           }
           case "resume": {
             if (!requireAdmin()) return new Response("Forbidden", { status: 403 });
-            const s = store.get(key);
+            const s = await getRow(key);
             if (!s) return new Response("Not found", { status: 404 });
-            if (!s.paused) return json({ ok: true, session: s });
-            const rem = s.pausedRemaining ?? 0;
-            const updated: Session = {
+            if (!s.paused) return json({ ok: true, session: rowToSession(s) });
+            const rem = Number(s.paused_remaining ?? 0);
+            const saved = await upsertRow({
               ...s,
               paused: false,
-              pausedRemaining: null,
-              endAt: now + rem,
-              updatedAt: now,
-            };
-            store.set(key, updated);
-            return json({ ok: true, session: updated });
+              paused_remaining: null,
+              end_at: now + rem,
+              updated_at: now,
+            });
+            return json({ ok: true, session: rowToSession(saved) });
           }
           case "extend": {
             if (!requireAdmin()) return new Response("Forbidden", { status: 403 });
@@ -178,24 +238,20 @@ export const Route = createFileRoute("/api/sessions")({
             if (!Number.isFinite(delta)) {
               return new Response("Invalid deltaMs", { status: 400 });
             }
-            const s = store.get(key);
+            const s = await getRow(key);
             if (!s) return new Response("Not found", { status: 404 });
-            let updated: Session;
-            if (s.paused) {
-              updated = {
-                ...s,
-                pausedRemaining: Math.max(0, (s.pausedRemaining ?? 0) + delta),
-                updatedAt: now,
-              };
-            } else {
-              updated = {
-                ...s,
-                endAt: Math.max(now, s.endAt + delta),
-                updatedAt: now,
-              };
-            }
-            store.set(key, updated);
-            return json({ ok: true, session: updated });
+            const saved = s.paused
+              ? await upsertRow({
+                  ...s,
+                  paused_remaining: Math.max(0, Number(s.paused_remaining ?? 0) + delta),
+                  updated_at: now,
+                })
+              : await upsertRow({
+                  ...s,
+                  end_at: Math.max(now, Number(s.end_at) + delta),
+                  updated_at: now,
+                });
+            return json({ ok: true, session: rowToSession(saved) });
           }
           default:
             return new Response("Unknown action", { status: 400 });
