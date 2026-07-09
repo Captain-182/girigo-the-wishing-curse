@@ -308,8 +308,9 @@ function Girigo() {
             setStage("landing");
           }}
           onExpired={() => {
-            clearPersistedExpires();
-            clearUserParam();
+            // DO NOT clear name/expires here — leaving them intact means a
+            // refresh after zero still routes into `prayer` via the mount
+            // check (now >= expCandidate), instead of dropping to landing.
             setStage("prayer");
           }}
         />
