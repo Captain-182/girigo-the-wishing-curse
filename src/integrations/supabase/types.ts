@@ -14,7 +14,42 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      girigo_sessions: {
+        Row: {
+          end_at: number
+          name: string
+          name_key: string
+          paused: boolean
+          paused_remaining: number | null
+          reprieved: boolean
+          reprieved_at: number | null
+          started_at: number
+          updated_at: number
+        }
+        Insert: {
+          end_at: number
+          name: string
+          name_key: string
+          paused?: boolean
+          paused_remaining?: number | null
+          reprieved?: boolean
+          reprieved_at?: number | null
+          started_at: number
+          updated_at: number
+        }
+        Update: {
+          end_at?: number
+          name?: string
+          name_key?: string
+          paused?: boolean
+          paused_remaining?: number | null
+          reprieved?: boolean
+          reprieved_at?: number | null
+          started_at?: number
+          updated_at?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
