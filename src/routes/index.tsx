@@ -1047,6 +1047,17 @@ function Curse({
     }
   };
 
+  const quickCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setQuickCopied(true);
+      setTimeout(() => setQuickCopied(false), 2400);
+    } catch {
+      /* noop */
+    }
+  };
+
+
   const completeTransfer = useCallback(() => {
     if (phase === "transferred") return;
     playStatic();
