@@ -844,7 +844,9 @@ function Curse({
   const [tick, setTick] = useState(0);
   const [phase, setPhase] = useState<CursePhase>("countdown");
   const [copied, setCopied] = useState(false);
+  const [quickCopied, setQuickCopied] = useState(false);
   const target = (name || "anonymous").trim();
+
   const expiredFiredRef = useRef(false);
   const endAtRef = useRef(endAt);
   endAtRef.current = endAt;
