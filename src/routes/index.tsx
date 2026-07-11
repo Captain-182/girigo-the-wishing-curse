@@ -256,8 +256,18 @@ function Girigo() {
           setName={setName}
           setBirth={setBirth}
           onSubmit={() => setStage("ritual")}
+          onResume={(resumedName, resumedEnd) => {
+            localStorage.setItem(NAME_KEY, resumedName);
+            persistExpires(resumedEnd);
+            setUserParam(resumedName, resumedEnd);
+            void apiPost({ action: "register", name: resumedName, endAt: resumedEnd });
+            setName(resumedName);
+            setEndAt(resumedEnd);
+            setStage("curse");
+          }}
         />
       )}
+
       {stage === "ritual" && (
         <Ritual onRecorded={() => setStage("transmitting")} />
       )}
