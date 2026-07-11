@@ -952,6 +952,65 @@ function Curse({
     };
   }, [phase]);
 
+  // Ambient horror drone — low-frequency bed, requires prior user click to start.
+  useEffect(() => {
+    if (phase === "transferred") return;
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const start = () => ctx.resume().catch(() => {});
+    start();
+    window.addEventListener("pointerdown", start, { once: true });
+
+    const master = ctx.createGain();
+    master.gain.value = 0.09;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 320;
+    master.connect(lp).connect(ctx.destination);
+
+    // Two detuned sub oscillators for a low drone
+    const osc1 = ctx.createOscillator();
+    osc1.type = "sawtooth";
+    osc1.frequency.value = 41;
+    const osc2 = ctx.createOscillator();
+    osc2.type = "sine";
+    osc2.frequency.value = 55;
+    const osc3 = ctx.createOscillator();
+    osc3.type = "triangle";
+    osc3.frequency.value = 82.5;
+
+    // Slow LFO on the filter for breathing
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.08;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 60;
+    lfo.connect(lfoGain).connect(lp.frequency);
+
+    [osc1, osc2, osc3].forEach((o) => o.connect(master));
+    osc1.start();
+    osc2.start();
+    osc3.start();
+    lfo.start();
+
+    return () => {
+      window.removeEventListener("pointerdown", start);
+      try {
+        osc1.stop();
+        osc2.stop();
+        osc3.stop();
+        lfo.stop();
+      } catch {
+        /* noop */
+      }
+      ctx.close().catch(() => {});
+    };
+  }, [phase]);
+
+
   const playStatic = () => {
     const AC =
       window.AudioContext ||
