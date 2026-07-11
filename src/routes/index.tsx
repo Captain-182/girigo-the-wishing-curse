@@ -1464,11 +1464,14 @@ function AdminPanel({ onClose }: { onClose: () => void }) {
               <span>ACTIVE SESSIONS ({sessions.length})</span>
               <button
                 onClick={() => void refresh()}
-                className="text-primary/70 hover:text-primary"
+                className="inline-flex items-center gap-1.5 border border-border/70 px-2.5 py-1 text-[9px] tracking-[0.35em] text-primary/70 transition-colors hover:border-primary/60 hover:text-primary"
+                title="Pull latest rows from database"
               >
-                REFRESH
+                <span className="inline-block h-1 w-1 rounded-full bg-primary animate-pulse-blood" />
+                REFRESH DATA
               </button>
             </div>
+
             {sessions.length === 0 && (
               <div className="border border-border/60 p-6 text-center font-mono text-[10px] tracking-[0.3em] text-muted-foreground/70">
                 NO SOULS BOUND
