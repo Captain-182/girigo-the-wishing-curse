@@ -380,14 +380,54 @@ function Landing({
   setName,
   setBirth,
   onSubmit,
+  onResume,
 }: {
   name: string;
   birth: string;
   setName: (v: string) => void;
   setBirth: (v: string) => void;
   onSubmit: () => void;
+  onResume: (name: string, endAt: number) => void;
 }) {
   const valid = name.trim().length > 1 && /^\d{4}-\d{2}-\d{2}$/.test(birth);
+  const [checkName, setCheckName] = useState("");
+  const [checkState, setCheckState] = useState<"idle" | "checking" | "clean">("idle");
+
+  const runCheck = async (candidate: string) => {
+    const q = candidate.trim();
+    if (!q) return;
+    setCheckState("checking");
+    const s = await apiGetSession(q);
+    if (s && sessionActive(s)) {
+      const end = s.paused ? Date.now() + (s.pausedRemaining ?? 0) : s.endAt;
+      onResume(q, end);
+      return;
+    }
+    setCheckState("clean");
+  };
+
+  // Silent check: if a name is cached but no timestamp exists, ping the server.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cached = localStorage.getItem(NAME_KEY);
+        if (!cached) return;
+        const s = await apiGetSession(cached);
+        if (cancelled) return;
+        if (s && sessionActive(s)) {
+          const end = s.paused ? Date.now() + (s.pausedRemaining ?? 0) : s.endAt;
+          onResume(cached, end);
+        }
+      } catch {
+        /* noop */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [onResume]);
+
   return (
     <section className="relative z-10 mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center px-6 py-20 animate-fade-up">
       <PrayingHands />
@@ -433,12 +473,51 @@ function Landing({
         </button>
       </form>
 
+      <div className="mt-10 w-full border-t border-border/50 pt-6">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runCheck(checkName);
+          }}
+          className="space-y-2"
+        >
+          <label className="block text-[10px] tracking-[0.4em] text-muted-foreground/70">
+            CHECK CURSE STATUS
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={checkName}
+              onChange={(e) => {
+                setCheckName(e.target.value);
+                if (checkState !== "idle") setCheckState("idle");
+              }}
+              placeholder="Enter your true name"
+              className="w-full border-b border-border/60 bg-transparent py-2 text-xs tracking-wider outline-none placeholder:text-muted-foreground/30 focus:border-primary"
+            />
+            <button
+              type="submit"
+              disabled={checkState === "checking" || checkName.trim().length < 2}
+              className="shrink-0 border border-border/60 px-3 py-2 font-mono text-[9px] tracking-[0.3em] text-muted-foreground hover:border-primary/60 hover:text-primary disabled:opacity-40"
+            >
+              {checkState === "checking" ? "…" : "SEEK"}
+            </button>
+          </div>
+          {checkState === "clean" && (
+            <div className="font-mono text-[9px] tracking-[0.4em] text-emerald-500/80">
+              NO BINDING FOUND
+            </div>
+          )}
+        </form>
+      </div>
+
       <p className="mt-10 max-w-xs text-center text-[10px] tracking-[0.3em] text-muted-foreground/60">
         BY PROCEEDING, YOU CONSENT TO BE BOUND.
       </p>
     </section>
   );
 }
+
 
 function Field({
   label,
