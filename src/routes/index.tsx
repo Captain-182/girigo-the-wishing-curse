@@ -1149,13 +1149,26 @@ function Curse({
           <br />
           TO RECORD THEIR DESIRES.
         </p>
-        <button
-          onClick={openPassing}
-          className="btn-ominous mt-6 px-8 py-3 font-display text-[10px] tracking-[0.5em]"
-        >
-          PASS THE RITUAL
-        </button>
+        <div className="mt-6 flex flex-col items-center gap-3">
+          <button
+            onClick={() => void quickCopy()}
+            className="group inline-flex items-center gap-2 border border-primary/40 bg-black/40 px-6 py-2.5 font-display text-[10px] tracking-[0.4em] text-primary/80 transition-all hover:border-primary hover:text-primary hover:shadow-[0_0_20px_oklch(0.55_0.25_27/0.4)]"
+          >
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse-blood" />
+            PASS THE CURSE
+          </button>
+          <div className="h-4 font-mono text-[9px] tracking-[0.4em] text-primary/70 animate-flicker">
+            {quickCopied ? "LINK COPIED. PASS IT ON…" : ""}
+          </div>
+          <button
+            onClick={openPassing}
+            className="btn-ominous px-8 py-3 font-display text-[10px] tracking-[0.5em]"
+          >
+            PASS THE RITUAL
+          </button>
+        </div>
       </div>
+
 
       {phase === "passing" && (
         <PassingModal
