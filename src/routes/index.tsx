@@ -256,8 +256,18 @@ function Girigo() {
           setName={setName}
           setBirth={setBirth}
           onSubmit={() => setStage("ritual")}
+          onResume={(resumedName, resumedEnd) => {
+            localStorage.setItem(NAME_KEY, resumedName);
+            persistExpires(resumedEnd);
+            setUserParam(resumedName, resumedEnd);
+            void apiPost({ action: "register", name: resumedName, endAt: resumedEnd });
+            setName(resumedName);
+            setEndAt(resumedEnd);
+            setStage("curse");
+          }}
         />
       )}
+
       {stage === "ritual" && (
         <Ritual onRecorded={() => setStage("transmitting")} />
       )}
@@ -370,14 +380,54 @@ function Landing({
   setName,
   setBirth,
   onSubmit,
+  onResume,
 }: {
   name: string;
   birth: string;
   setName: (v: string) => void;
   setBirth: (v: string) => void;
   onSubmit: () => void;
+  onResume: (name: string, endAt: number) => void;
 }) {
   const valid = name.trim().length > 1 && /^\d{4}-\d{2}-\d{2}$/.test(birth);
+  const [checkName, setCheckName] = useState("");
+  const [checkState, setCheckState] = useState<"idle" | "checking" | "clean">("idle");
+
+  const runCheck = async (candidate: string) => {
+    const q = candidate.trim();
+    if (!q) return;
+    setCheckState("checking");
+    const s = await apiGetSession(q);
+    if (s && sessionActive(s)) {
+      const end = s.paused ? Date.now() + (s.pausedRemaining ?? 0) : s.endAt;
+      onResume(q, end);
+      return;
+    }
+    setCheckState("clean");
+  };
+
+  // Silent check: if a name is cached but no timestamp exists, ping the server.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cached = localStorage.getItem(NAME_KEY);
+        if (!cached) return;
+        const s = await apiGetSession(cached);
+        if (cancelled) return;
+        if (s && sessionActive(s)) {
+          const end = s.paused ? Date.now() + (s.pausedRemaining ?? 0) : s.endAt;
+          onResume(cached, end);
+        }
+      } catch {
+        /* noop */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [onResume]);
+
   return (
     <section className="relative z-10 mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center px-6 py-20 animate-fade-up">
       <PrayingHands />
@@ -423,12 +473,51 @@ function Landing({
         </button>
       </form>
 
+      <div className="mt-10 w-full border-t border-border/50 pt-6">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runCheck(checkName);
+          }}
+          className="space-y-2"
+        >
+          <label className="block text-[10px] tracking-[0.4em] text-muted-foreground/70">
+            CHECK CURSE STATUS
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={checkName}
+              onChange={(e) => {
+                setCheckName(e.target.value);
+                if (checkState !== "idle") setCheckState("idle");
+              }}
+              placeholder="Enter your true name"
+              className="w-full border-b border-border/60 bg-transparent py-2 text-xs tracking-wider outline-none placeholder:text-muted-foreground/30 focus:border-primary"
+            />
+            <button
+              type="submit"
+              disabled={checkState === "checking" || checkName.trim().length < 2}
+              className="shrink-0 border border-border/60 px-3 py-2 font-mono text-[9px] tracking-[0.3em] text-muted-foreground hover:border-primary/60 hover:text-primary disabled:opacity-40"
+            >
+              {checkState === "checking" ? "…" : "SEEK"}
+            </button>
+          </div>
+          {checkState === "clean" && (
+            <div className="font-mono text-[9px] tracking-[0.4em] text-emerald-500/80">
+              NO BINDING FOUND
+            </div>
+          )}
+        </form>
+      </div>
+
       <p className="mt-10 max-w-xs text-center text-[10px] tracking-[0.3em] text-muted-foreground/60">
         BY PROCEEDING, YOU CONSENT TO BE BOUND.
       </p>
     </section>
   );
 }
+
 
 function Field({
   label,
@@ -755,7 +844,9 @@ function Curse({
   const [tick, setTick] = useState(0);
   const [phase, setPhase] = useState<CursePhase>("countdown");
   const [copied, setCopied] = useState(false);
+  const [quickCopied, setQuickCopied] = useState(false);
   const target = (name || "anonymous").trim();
+
   const expiredFiredRef = useRef(false);
   const endAtRef = useRef(endAt);
   endAtRef.current = endAt;
@@ -861,6 +952,65 @@ function Curse({
     };
   }, [phase]);
 
+  // Ambient horror drone — low-frequency bed, requires prior user click to start.
+  useEffect(() => {
+    if (phase === "transferred") return;
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const start = () => ctx.resume().catch(() => {});
+    start();
+    window.addEventListener("pointerdown", start, { once: true });
+
+    const master = ctx.createGain();
+    master.gain.value = 0.09;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 320;
+    master.connect(lp).connect(ctx.destination);
+
+    // Two detuned sub oscillators for a low drone
+    const osc1 = ctx.createOscillator();
+    osc1.type = "sawtooth";
+    osc1.frequency.value = 41;
+    const osc2 = ctx.createOscillator();
+    osc2.type = "sine";
+    osc2.frequency.value = 55;
+    const osc3 = ctx.createOscillator();
+    osc3.type = "triangle";
+    osc3.frequency.value = 82.5;
+
+    // Slow LFO on the filter for breathing
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.08;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 60;
+    lfo.connect(lfoGain).connect(lp.frequency);
+
+    [osc1, osc2, osc3].forEach((o) => o.connect(master));
+    osc1.start();
+    osc2.start();
+    osc3.start();
+    lfo.start();
+
+    return () => {
+      window.removeEventListener("pointerdown", start);
+      try {
+        osc1.stop();
+        osc2.stop();
+        osc3.stop();
+        lfo.stop();
+      } catch {
+        /* noop */
+      }
+      ctx.close().catch(() => {});
+    };
+  }, [phase]);
+
+
   const playStatic = () => {
     const AC =
       window.AudioContext ||
@@ -896,6 +1046,17 @@ function Curse({
       setCopied(false);
     }
   };
+
+  const quickCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setQuickCopied(true);
+      setTimeout(() => setQuickCopied(false), 2400);
+    } catch {
+      /* noop */
+    }
+  };
+
 
   const completeTransfer = useCallback(() => {
     if (phase === "transferred") return;
@@ -988,13 +1149,26 @@ function Curse({
           <br />
           TO RECORD THEIR DESIRES.
         </p>
-        <button
-          onClick={openPassing}
-          className="btn-ominous mt-6 px-8 py-3 font-display text-[10px] tracking-[0.5em]"
-        >
-          PASS THE RITUAL
-        </button>
+        <div className="mt-6 flex flex-col items-center gap-3">
+          <button
+            onClick={() => void quickCopy()}
+            className="group inline-flex items-center gap-2 border border-primary/40 bg-black/40 px-6 py-2.5 font-display text-[10px] tracking-[0.4em] text-primary/80 transition-all hover:border-primary hover:text-primary hover:shadow-[0_0_20px_oklch(0.55_0.25_27/0.4)]"
+          >
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse-blood" />
+            PASS THE CURSE
+          </button>
+          <div className="h-4 font-mono text-[9px] tracking-[0.4em] text-primary/70 animate-flicker">
+            {quickCopied ? "LINK COPIED. PASS IT ON…" : ""}
+          </div>
+          <button
+            onClick={openPassing}
+            className="btn-ominous px-8 py-3 font-display text-[10px] tracking-[0.5em]"
+          >
+            PASS THE RITUAL
+          </button>
+        </div>
       </div>
+
 
       {phase === "passing" && (
         <PassingModal
@@ -1290,11 +1464,14 @@ function AdminPanel({ onClose }: { onClose: () => void }) {
               <span>ACTIVE SESSIONS ({sessions.length})</span>
               <button
                 onClick={() => void refresh()}
-                className="text-primary/70 hover:text-primary"
+                className="inline-flex items-center gap-1.5 border border-border/70 px-2.5 py-1 text-[9px] tracking-[0.35em] text-primary/70 transition-colors hover:border-primary/60 hover:text-primary"
+                title="Pull latest rows from database"
               >
-                REFRESH
+                <span className="inline-block h-1 w-1 rounded-full bg-primary animate-pulse-blood" />
+                REFRESH DATA
               </button>
             </div>
+
             {sessions.length === 0 && (
               <div className="border border-border/60 p-6 text-center font-mono text-[10px] tracking-[0.3em] text-muted-foreground/70">
                 NO SOULS BOUND
